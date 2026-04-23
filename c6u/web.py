@@ -421,6 +421,17 @@ def api_portscan():
     return ps_mod.scan()
 
 
+@app.get("/api/portscan/lan")
+def api_portscan_lan(timeout: float = 0.5):
+    from . import portscan as ps_mod
+    try:
+        r = ps_mod.scan_lan(timeout=timeout)
+        r["risky"] = ps_mod.risky_findings(r)
+        return r
+    except Exception as e:
+        raise HTTPException(502, str(e))
+
+
 @app.get("/api/dns-check")
 def api_dns_check():
     from . import dnscheck
@@ -577,6 +588,10 @@ th,td{padding:6px 8px;text-align:left;border-bottom:1px solid #8882;}
 <button onclick="pscan()">Run scan</button> <span id=psum></span>
 <pre id=pout>click Run scan…</pre></div>
 
+<div class=card><h2>Port scan (every LAN device)</h2>
+<button onclick="lscan()">Run LAN scan</button> <span id=lsum></span>
+<div id=lout>click Run LAN scan…</div></div>
+
 <div class=card><h2>DNS hijack check</h2>
 <button onclick="dnsc()">Run check</button> <span id=dsum></span>
 <pre id=dout>click Run check…</pre></div>
@@ -602,6 +617,18 @@ async function pscan(){document.getElementById('pout').textContent='scanning…'
   const d=await(await fetch('/api/portscan')).json();
   document.getElementById('psum').innerHTML=d.open?.length?`<span class=bad>${d.open.length} open</span>`:'<span class=ok>all closed</span>';
   document.getElementById('pout').textContent=JSON.stringify(d,null,2);}
+async function lscan(){document.getElementById('lout').textContent='scanning LAN (may take ~30s)…';
+  const d=await(await fetch('/api/portscan/lan')).json();
+  document.getElementById('lsum').innerHTML = d.risky?.length
+    ? `<span class=bad>${d.risky.length} host(s) with risky ports</span>`
+    : `<span class=ok>scanned ${d.devices.length} hosts, no risky ports</span>`;
+  const rows = (d.devices||[]).map(x=>{
+    const open = (x.open||[]).join(', ') || '-';
+    const cls = (d.risky||[]).some(r=>r.ip===x.ip) ? 'bad' : '';
+    return `<tr class=${cls}><td>${x.alias||x.hostname||'-'}</td><td>${x.ip}</td><td>${x.mac||'-'}</td><td>${x.vendor||'-'}</td><td class=mono>${open}</td></tr>`;
+  }).join('');
+  document.getElementById('lout').innerHTML='<table><tr><th>Name</th><th>IP</th><th>MAC</th><th>Vendor</th><th>Open ports</th></tr>'+rows+'</table>';
+}
 async function dnsc(){document.getElementById('dout').textContent='checking…';
   const d=await(await fetch('/api/dns-check')).json();
   document.getElementById('dsum').innerHTML=d.hijack_suspected?`<span class=bad>${d.hijack_suspected} suspect</span>`:'<span class=ok>clean</span>';

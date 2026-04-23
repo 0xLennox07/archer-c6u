@@ -690,9 +690,43 @@ def cmd_discord(args) -> None:
     console.print("[green]sent[/green]" if ok else "[yellow]no discord webhook configured[/yellow]")
 
 
-def cmd_portscan(_args) -> None:
+def cmd_portscan(args) -> None:
     from . import portscan
-    r = portscan.scan()
+    if getattr(args, "lan", False):
+        kw = {}
+        if args.timeout is not None: kw["timeout"] = args.timeout
+        if args.workers is not None: kw["workers"] = args.workers
+        r = portscan.scan_lan(**kw)
+        if getattr(args, "json", False):
+            print(_json.dumps(r, indent=2)); return
+        from rich.table import Table
+        t = Table(title=f"LAN port scan ({len(r['devices'])} hosts, {r['checked_per_host']} ports each)")
+        for col in ("Name", "Hostname", "IP", "MAC", "Vendor", "Open ports"):
+            t.add_column(col)
+        for d in r["devices"]:
+            open_s = ", ".join(str(p) for p in d["open"]) or "[dim]-[/dim]"
+            risky = portscan.RISKY_LAN_PORTS.intersection(d["open"])
+            if risky:
+                open_s = "[bold red]" + ", ".join(str(p) for p in d["open"]) + "[/bold red]"
+            t.add_row(d.get("alias") or "-", d["hostname"] or "-", d["ip"],
+                      d["mac"] or "-", d["vendor"] or "-", open_s)
+        console.print(t)
+        risky_hosts = portscan.risky_findings(r)
+        if risky_hosts:
+            console.print(f"\n[bold red]{len(risky_hosts)} host(s) with risky ports open:[/bold red]")
+            for h in risky_hosts:
+                console.print(f"  {h['alias'] or h['hostname'] or h['ip']}  -> {h['risky_ports']}")
+        else:
+            console.print("\n[green]no risky LAN ports found[/green]")
+        return
+
+    kw = {}
+    if args.target: kw["ip"] = args.target
+    if args.timeout is not None: kw["timeout"] = args.timeout
+    if args.workers is not None: kw["workers"] = args.workers
+    r = portscan.scan(**kw)
+    if getattr(args, "json", False):
+        print(_json.dumps(r, indent=2)); return
     if r.get("error"):
         console.print(f"[red]{r['error']}[/red]"); return
     console.print(f"[bold]public IP:[/bold] {r['ip']}   checked: {r['checked']}")

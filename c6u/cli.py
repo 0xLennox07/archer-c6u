@@ -253,7 +253,12 @@ def build_parser() -> argparse.ArgumentParser:
     dc.set_defaults(func=c.cmd_discord)
 
     # security
-    sub.add_parser("portscan", help="TCP port scan of your public IP").set_defaults(func=c.cmd_portscan)
+    ps = sub.add_parser("portscan", help="TCP port scan of your public IP (or --lan for every device on the network)")
+    ps.add_argument("--lan", action="store_true", help="scan every router-known device instead of the public IP")
+    ps.add_argument("--target", help="scan a single explicit IP")
+    ps.add_argument("--timeout", type=float, default=None, help="per-port timeout seconds")
+    ps.add_argument("--workers", type=int, default=None)
+    _add_json(ps); ps.set_defaults(func=c.cmd_portscan)
     sub.add_parser("arpwatch", help="snapshot ARP table, flag conflicts").set_defaults(func=c.cmd_arpwatch)
     sub.add_parser("dnscheck", help="compare system DNS to DoH (Cloudflare/Google)").set_defaults(func=c.cmd_dnscheck)
     hb = sub.add_parser("hibp", help="Have I Been Pwned - password or email check")

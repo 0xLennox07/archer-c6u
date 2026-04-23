@@ -115,7 +115,7 @@ Optional `config.json` extras:
 ### Security
 | cmd | what |
 |---|---|
-| `portscan` | TCP port scan of your public IP |
+| `portscan [--lan] [--target IP] [--json]` | TCP port scan — default: your public IP; `--lan` scans every device the router knows about |
 | `arpwatch` | snapshot ARP table, alert on MAC↔IP changes |
 | `dnscheck` | compare system resolver to DoH (Cloudflare + Google), flag hijacks |
 | `tlswatch` | fingerprint (SPKI-pin) the router admin UI cert, alert on change |
