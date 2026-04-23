@@ -1,12 +1,20 @@
 # c6u — TP-Link Archer C6U control suite
 
-Auto-logs into your router's web admin (handles the RSA+AES encrypted login via [`tplinkrouterc6u`](https://github.com/AlexandrErohin/TP-Link-Archer-C6U)) and gives you a CLI, Textual TUI, REPL, live watch mode, SQLite history, desktop alerts, push notifications (ntfy/Pushover/Gotify), Telegram bot, Discord webhook, Prometheus exporter, Grafana dashboard, FastAPI dashboard with live WebSocket updates + history graphs + device heatmaps + security posture page, system tray, MAC vendor + alias enrichment, device fingerprinting, latency probes, mDNS/SSDP discovery, public-IP tracker, external-latency map, connectivity watchdog, MQTT publisher (Home Assistant auto-discovery) + native HA custom component, rules engine (YAML/JSON), cron-style automation jobs, anomaly detection, CVE watcher, ISP SLA report, webhooks, CSV export, SQL CLI, FTS5 event search, backup/restore, admin password rotator, parental-controls scheduler, port-scan detector, DNS-hijack detector, ARP watcher, TLS pin watcher, HIBP checker, multi-router profiles, Docker image + compose, shell completions (bash/zsh/fish/pwsh), GitHub Actions CI, and a combined background daemon that runs all of it.
+Auto-logs into your router's web admin (handles the RSA+AES encrypted login via [`tplinkrouterc6u`](https://github.com/AlexandrErohin/TP-Link-Archer-C6U)) and gives you a CLI, Textual TUI, REPL, live watch mode, SQLite history, desktop alerts, push notifications (ntfy/Pushover/Gotify), Telegram bot, Discord webhook, Prometheus exporter, Grafana dashboard, FastAPI dashboard with live WebSocket updates + history graphs + device heatmaps + security posture page + browser-based rules/automation editor + installable PWA, mini Pi-hole DNS resolver with blocklists and per-MAC policies, passive DNS, NetFlow v5 receiver, tshark packet-capture wrapper, plugin system, WireGuard config generator (+QR for phones), ACME/Let's Encrypt cert helper, self-update + retention + signed audit log + unified notifier with cooldowns + simulated router for offline dev, system tray, MAC vendor + alias enrichment, device fingerprinting, latency probes, mDNS/SSDP discovery, public-IP tracker, external-latency map, connectivity watchdog, MQTT publisher (Home Assistant auto-discovery) + native HA custom component, rules engine (YAML/JSON), cron-style automation jobs, anomaly detection, CVE watcher, ISP SLA report, webhooks, CSV export, SQL CLI, FTS5 event search, backup/restore, admin password rotator, parental-controls scheduler, port-scan detector, DNS-hijack detector, ARP watcher, TLS pin watcher, HIBP checker, multi-router profiles, Docker image + compose, shell completions (bash/zsh/fish/pwsh), GitHub Actions CI, and a combined background daemon that runs all of it.
 
 ## Setup
 
 ```bash
-pip install -r requirements.txt
-python main.py setup        # interactive wizard, password into OS keyring
+pip install -e .                 # installs the `c6u` command on your PATH
+c6u setup                        # interactive wizard, password goes into the OS keyring
+```
+
+(An older `pip install -r requirements.txt && python main.py ...` flow still works, so does `c6u` and `python main.py` interchangeably after install.)
+
+**Try it offline first** — the whole stack runs against a recorded-fixture router:
+```bash
+c6u --fake all                   # full status dump, no router needed
+c6u --fake web                   # dashboard against simulated data
 ```
 
 Optional `config.json` extras:
@@ -131,6 +139,38 @@ Optional `config.json` extras:
 | `backup [--out file.tar.gz]` | bundle config + aliases + DB + profiles + rules + TLS pins |
 | `restore <archive> [--overwrite]` | restore from a backup archive |
 
+### Traffic intelligence
+| cmd | what |
+|---|---|
+| `dns run [--port N]` | start the forwarding DNS resolver with blocklist + logging (see [DNS filter](#dns-filter)) |
+| `dns stats [--days N]` | top domains / blocked / clients over the last N days |
+| `dns blocklist update` | pull configured blocklists (default: StevenBlack unified hosts) |
+| `netflow run [--port N]` | NetFlow v5 receiver (default port 2055) |
+| `netflow top [--by bytes\|packets\|count] [--days N]` | top talkers from recorded flows |
+| `pcap interfaces` | list tshark-visible network interfaces |
+| `pcap burst <interface> [--seconds N] [--filter BPF]` | one-shot N-second capture to `pcaps/` |
+| `pdns <ip\|hostname>` | passive-DNS lookup from observed A-records |
+
+### Anywhere access
+| cmd | what |
+|---|---|
+| `vpn provision [--peers NAMES] [--network CIDR] [--endpoint IP:PORT]` | generate WireGuard server + per-peer configs (+QR) |
+| `vpn tailscale` | `tailscale status` wrapper |
+| `acme issue [--staging]` | run certbot, drop cert+key into `certs/` |
+| `acme renew` / `acme status` |  |
+| `web --ssl` | serve HTTPS using the issued cert |
+
+### Ops hygiene
+| cmd | what |
+|---|---|
+| `version` | show the current c6u commit |
+| `update [--no-pull] [--no-deps]` | `git pull` + `pip install -r requirements.txt` |
+| `retention sweep` / `retention sizes` / `retention vacuum` | age out old samples + VACUUM |
+| `audit seal` / `audit verify` | hash-chain the event log + detect tamper |
+| `notifier recent` / `notifier test --kind K --key ...` | inspect unified notification history |
+| `plugins` | list plugins discovered in `plugins/*.py` |
+| `--fake <any subcommand>` | swap in the simulated router (no network) |
+
 ### Multi-router
 - Default config: `config.json` in repo root.
 - Add a profile: drop `profiles/office.json`, then run with `--profile office`.
@@ -147,11 +187,15 @@ python main.py web   # http://127.0.0.1:8000
 - **`/history`** — Chart.js graphs from SQLite (clients, CPU, memory, speedtest, public-IP changes)
 - **`/device/<MAC>`** — per-device timeline + latency chart
 - **`/heatmaps`** — 24x7 presence heatmaps for the top-N devices
-- **`/security`** — port scan, DNS hijack, ARP table, TLS pin, CVE, anomaly panels
+- **`/security`** — port scan (WAN + LAN), DNS hijack, ARP table, TLS pin, CVE, anomaly panels
+- **`/dns`** — DNS filter stats: top domains / blocks / clients, update blocklist button
+- **`/flows`** — NetFlow top talkers (empty until a switch starts exporting)
+- **`/rules`** — browser-based JSON editor for `rules.json` and `automation.json` + synthetic-event test console
 - **`/digest`** — on-demand weekly HTML report
 - **`/discover`** — live mDNS + SSDP scan
+- **PWA** — `/manifest.webmanifest` + `/sw.js` so the dashboard installs as an app. iOS Safari → Share → *Add to Home Screen*.
 
-JSON endpoints: `/api/all`, `/api/history?days=N`, `/api/device/<MAC>`, `/api/discover`, `/api/presence`, `/api/public-ip`, `/api/latency-probe`, `/api/heatmap`, `/api/anomaly`, `/api/sla`, `/api/cve`, `/api/events/search?q=`, `/api/fingerprint`, `/api/portscan`, `/api/dns-check`, `/api/arp`, `/api/tls-check`, `/api/ext-latency`, `/api/rules`, `/api/automation`. WebSocket: `/ws` (5s status frames).
+JSON endpoints: `/api/all`, `/api/history?days=N`, `/api/device/<MAC>`, `/api/discover`, `/api/presence`, `/api/public-ip`, `/api/latency-probe`, `/api/heatmap`, `/api/anomaly`, `/api/sla`, `/api/cve`, `/api/events/search?q=`, `/api/fingerprint`, `/api/portscan`, `/api/portscan/lan`, `/api/dns-check`, `/api/arp`, `/api/tls-check`, `/api/ext-latency`, `/api/ext-latency/probe`, `/api/rules`, `/api/rules/save`, `/api/rules/test`, `/api/automation`, `/api/automation/save`, `/api/dns/stats`, `/api/dns/blocklist/update`, `/api/flows/top`, `/api/pdns`, `/api/plugins`, `/api/digest`, `/api/rotate-password`. WebSocket: `/ws` (5s status frames).
 
 ## Rules
 
@@ -239,22 +283,87 @@ Runs three containers: `c6u-daemon` (host-networked for discovery), `c6u-web` (p
 ## Daemon (recommended setup)
 
 ```bash
-python main.py daemon   # snapshot every 60s, latency every 120s, publicip every 600s
+c6u daemon   # snapshot + latency + publicip + extping + anomaly + automation
+c6u daemon --watchdog --auto-reboot --dns-filter --retention 86400
 ```
 
-Fires webhooks (`device_joined`, `device_left`, `public_ip_changed`) to every URL in `config.json -> webhooks`, and publishes MQTT state if `mqtt` is configured.
+Knobs: `--snap N` / `--latency N` / `--publicip N` / `--extping N` / `--anomaly N` / `--retention N` (seconds; 0 disables each). `--dns-filter` runs the DNS resolver inside the daemon (needs admin for :53). `--no-automation` disables the cron runner. `--watchdog` adds the connectivity watchdog; `--watchdog-auto-reboot` tells it to reboot the router after N consecutive failures.
+
+Fires webhooks (`device_joined`, `device_left`, `public_ip_changed`, `outage_started`, `outage_recovered`, `anomaly_*`) to every URL in `config.json -> webhooks`, dispatches each through the rules engine, routes through the unified notifier (dedup + cooldown), and publishes MQTT state if `mqtt` is configured.
 
 To run at logon as a Windows scheduled task:
 ```bash
-python main.py schedule --out c6u_daemon.xml
+c6u schedule --out c6u_daemon.xml
 schtasks /create /tn c6u_daemon /xml c6u_daemon.xml
 ```
 
-## Home Assistant integration
+## DNS filter
 
-1. Set `mqtt` block in `config.json`.
-2. `python main.py mqtt --discovery` (one-shot). HA auto-creates sensors: `sensor.c6u_clients`, `sensor.c6u_cpu`, `sensor.c6u_mem`, `sensor.c6u_wired`, `sensor.c6u_wifi`, `sensor.c6u_public_ip`.
-3. Run `python main.py daemon` to keep state fresh.
+```bash
+c6u dns blocklist update    # pull ~160k domains from StevenBlack's unified list
+sudo c6u dns run            # UDP :53 (needs admin)
+```
+
+Config (`config.json -> dns`):
+```json
+"dns": {
+  "port": 53,
+  "upstreams": ["https://cloudflare-dns.com/dns-query", "https://dns.google/resolve"],
+  "blocklists": ["https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"],
+  "policies": {
+    "default":             {"block": true},
+    "AA:BB:CC:11:22:33":  {"block": false}
+  },
+  "log": true, "ttl": 300
+}
+```
+
+Then point your router's DHCP *DNS server* at the machine running c6u, renew DHCP on your devices, and check `c6u dns stats` / `/dns`.
+
+## Plugins
+
+Drop any `.py` file into `plugins/` at the repo root — it's auto-discovered on startup. Any of these four entrypoints is optional:
+
+```python
+# plugins/my_plugin.py
+def register_cli(sub):          # add c6u subcommands
+    p = sub.add_parser("hello"); p.set_defaults(func=lambda a: print("hi"))
+def register_rule_actions(actions):  # add rules-engine action kinds
+    actions["slack_msg"] = lambda spec, event, cfg: ...
+def register_web(app):          # add FastAPI routes
+    @app.get("/api/hello")
+    def _h(): return {"hi": True}
+def register_daemon_loop(add_loop, stop):  # add background ticks
+    add_loop(120, lambda: print("tick"), "my-tick")
+```
+
+`plugins/example_hello.py` is a full example. `c6u plugins` lists the discovered ones.
+
+## WireGuard + ACME
+
+```bash
+c6u vpn provision --peers phone laptop --endpoint YOUR_PUBLIC_IP:51820
+ls wireguard/             # wg0.conf (server) + phone.conf + phone.png + laptop.conf + laptop.png
+```
+
+Copy `wg0.conf` to `/etc/wireguard/` and `wg-quick up wg0` to start the server. Each peer's `.png` is a WireGuard QR for the official mobile apps.
+
+```bash
+# config.json -> "acme": {"domain": "home.example.com", "email": "you@example.com"}
+sudo c6u acme issue --staging       # test against LE staging so you don't get rate-limited
+sudo c6u acme issue                 # real cert when staging works
+c6u web --ssl                       # HTTPS dashboard using the issued cert
+```
+
+## Simulated router mode
+
+Every subcommand runs against a recorded fixture when `C6U_FAKE=1` or `--fake` is set:
+
+```bash
+c6u --fake all          # status against 6 fixture devices
+c6u --fake web          # dashboard with live-looking data, no router needed
+c6u --fake daemon       # whole stack runs offline (handy for CI + dev)
+```
 
 ## Files it creates
 
@@ -263,8 +372,12 @@ schtasks /create /tn c6u_daemon /xml c6u_daemon.xml
 | `config.json` | router URL/user/options (no password) |
 | `aliases.json` | MAC → friendly name |
 | `known_macs.txt` | watch-mode whitelist |
-| `c6u.sqlite3` | snapshots + devices + speedtests + latency + events + public_ip |
+| `c6u.sqlite3` | snapshots + devices + speedtests + latency + events + public_ip + dns_query + flow_sample + pdns_cache + notify_sent + audit_seal |
+| `rules.json` / `automation.json` / `parental.json` | declarative triggers + schedules |
+| `tls_pins.json` | router admin cert SPKI pins |
 | `profiles/*.json` | additional router profiles |
+| `pcaps/`, `certs/`, `wireguard/`, `acme-webroot/` | pcap rolls / Let's Encrypt cert / WireGuard configs / HTTP-01 challenge webroot |
+| `plugins/*.py` | user plugins (loaded at startup) |
 
 All gitignored.
 
@@ -282,7 +395,7 @@ Drop one of the `completions/c6u.*` files into your shell's completion directory
 pytest
 ```
 
-34 tests cover DB round-trips, WoL packet shape, QR payload, aliases, public-IP change detection, event log, CLI help, push fanout, rules matching, cron expressions, heatmap aggregation, SLA percentiles, anomaly scan, backup round-trip, FTS5 search, fingerprint heuristics, parental schedule windows.
+47 tests covering DB round-trips, WoL packet shape, QR payload, aliases, public-IP change detection, event log, CLI help, push fanout, rules matching, cron expressions, heatmap aggregation, SLA percentiles, anomaly scan, backup round-trip, FTS5 search, fingerprint heuristics, parental schedule windows, port-scan retry/risky filter, DNS blocklist matching + hosts-file parsing, NetFlow v5 parsing, notifier cooldown, retention sweep, audit hash-chain + tamper detection, WireGuard keypair generation, WG provision round-trip, fake-router status shape, plugin discovery, unknown-rule-action graceful skip.
 
 ## Build a single .exe
 
