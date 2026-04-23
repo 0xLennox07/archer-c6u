@@ -185,8 +185,13 @@ ACTIONS = {
 
 
 def dispatch(event: dict, cfg: dict | None = None, rules: list[dict] | None = None) -> int:
-    """Feed an event through all rules. Returns count of actions fired."""
-    cfg = cfg or cfg_mod.load_config(interactive=False)
+    """Feed an event through all rules. Returns count of actions fired.
+
+    `cfg=None` means "load from disk"; an empty dict `{}` is treated as an
+    explicit config (useful for tests / callers that don't need keyring/config).
+    """
+    if cfg is None:
+        cfg = cfg_mod.load_config(interactive=False)
     rules = rules if rules is not None else load_rules()
     fired = 0
     for rule in rules:
