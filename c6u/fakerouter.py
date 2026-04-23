@@ -42,37 +42,44 @@ class Device:
 
 @dataclass
 class Status:
+    # Match the tplinkrouterc6u Status attribute names exactly so render/mqtt/etc. work.
     cpu_usage: float = 0.18
     mem_usage: float = 0.42
+    conn_type: str | None = "DHCP"
     wan_ipv4_address: str | None = "203.0.113.10"
+    wan_ipv4_gateway_address: str | None = "203.0.113.1"
     wan_ipv4_uptime: int = 123456
-    lan_ipv4_addr: str = "192.168.0.1"
+    wan_macaddress: str = "AA:BB:CC:DD:EE:FF"
+    lan_ipv4_address: str = "192.168.0.1"
+    lan_macaddress: str = "AA:BB:CC:DD:EE:FE"
     clients_total: int = 0
     wired_total: int = 0
     wifi_clients_total: int = 0
     guest_clients_total: int = 0
-    conn_type: str | None = "DHCP"
     wifi_2g_enable: bool = True
     wifi_5g_enable: bool = True
     wifi_6g_enable: bool = False
     guest_2g_enable: bool = False
     guest_5g_enable: bool = False
+    guest_6g_enable: bool = False
     iot_2g_enable: bool = False
     iot_5g_enable: bool = False
+    iot_6g_enable: bool = False
     devices: list[Device] = field(default_factory=list)
 
 
 @dataclass
 class IPv4Status:
     wan_ipv4_conntype: str = "DHCP"
-    wan_ipv4_ipaddr: str = "203.0.113.10"
-    wan_ipv4_gateway: str = "203.0.113.1"
-    wan_ipv4_netmask: str = "255.255.255.0"
-    wan_ipv4_pridns: str = "1.1.1.1"
-    wan_ipv4_snddns: str = "8.8.8.8"
-    wan_macaddr: str = "AA:BB:CC:DD:EE:FF"
-    lan_ipv4_ipaddr: str = "192.168.0.1"
-    lan_macaddr: str = "AA:BB:CC:DD:EE:FE"
+    wan_ipv4_ipaddress: str = "203.0.113.10"
+    wan_ipv4_gateway_address: str = "203.0.113.1"
+    wan_ipv4_netmask_address: str = "255.255.255.0"
+    wan_ipv4_pridns_address: str = "1.1.1.1"
+    wan_ipv4_snddns_address: str = "8.8.8.8"
+    wan_macaddress: str = "AA:BB:CC:DD:EE:FF"
+    lan_ipv4_ipaddress: str = "192.168.0.1"
+    lan_ipv4_netmask_address: str = "255.255.255.0"
+    lan_macaddress: str = "AA:BB:CC:DD:EE:FE"
     lan_ipv4_dhcp_enable: bool = True
     remote: bool = False
 
