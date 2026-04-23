@@ -692,21 +692,32 @@ def cmd_discord(args) -> None:
 
 def cmd_portscan(args) -> None:
     from . import portscan
+    # Resolve port list from --ports spec.
+    default_ports = portscan.LAN_PORTS if getattr(args, "lan", False) else portscan.COMMON_PORTS
+    try:
+        ports = portscan.parse_ports(args.ports) if args.ports else default_ports
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]"); return
+
+    kw: dict = {"ports": ports}
+    if args.timeout is not None: kw["timeout"] = args.timeout
+    if args.workers is not None: kw["workers"] = args.workers
+    if args.retry_timeout is not None:
+        # 0 → disable retry by making retry_timeout <= timeout.
+        kw["retry_timeout"] = args.retry_timeout if args.retry_timeout > 0 else 0
+
     if getattr(args, "lan", False):
-        kw = {}
-        if args.timeout is not None: kw["timeout"] = args.timeout
-        if args.workers is not None: kw["workers"] = args.workers
         r = portscan.scan_lan(**kw)
         if getattr(args, "json", False):
             print(_json.dumps(r, indent=2)); return
         from rich.table import Table
-        t = Table(title=f"LAN port scan ({len(r['devices'])} hosts, {r['checked_per_host']} ports each)")
+        t = Table(title=f"LAN port scan ({len(r['devices'])} hosts × {r['checked_per_host']} ports, "
+                        f"{r.get('total_timeouts', 0)} timeouts)")
         for col in ("Name", "Hostname", "IP", "MAC", "Vendor", "Open ports"):
             t.add_column(col)
         for d in r["devices"]:
             open_s = ", ".join(str(p) for p in d["open"]) or "[dim]-[/dim]"
-            risky = portscan.RISKY_LAN_PORTS.intersection(d["open"])
-            if risky:
+            if portscan.RISKY_LAN_PORTS.intersection(d["open"]):
                 open_s = "[bold red]" + ", ".join(str(p) for p in d["open"]) + "[/bold red]"
             t.add_row(d.get("alias") or "-", d["hostname"] or "-", d["ip"],
                       d["mac"] or "-", d["vendor"] or "-", open_s)
@@ -720,20 +731,19 @@ def cmd_portscan(args) -> None:
             console.print("\n[green]no risky LAN ports found[/green]")
         return
 
-    kw = {}
-    if args.target: kw["ip"] = args.target
-    if args.timeout is not None: kw["timeout"] = args.timeout
-    if args.workers is not None: kw["workers"] = args.workers
+    # Public-IP / single-target path.
+    if args.target:
+        kw["ip"] = args.target
     r = portscan.scan(**kw)
     if getattr(args, "json", False):
         print(_json.dumps(r, indent=2)); return
     if r.get("error"):
         console.print(f"[red]{r['error']}[/red]"); return
-    console.print(f"[bold]public IP:[/bold] {r['ip']}   checked: {r['checked']}")
+    console.print(f"[bold]IP:[/bold] {r['ip']}   checked: {r['checked']}")
     if r["open"]:
         console.print(f"[bold red]open ports:[/bold red] {', '.join(str(p) for p in r['open'])}")
     else:
-        console.print("[green]no ports open from the outside[/green]")
+        console.print("[green]no ports open[/green]")
 
 
 def cmd_arpwatch(_args) -> None:

@@ -256,7 +256,11 @@ def build_parser() -> argparse.ArgumentParser:
     ps = sub.add_parser("portscan", help="TCP port scan of your public IP (or --lan for every device on the network)")
     ps.add_argument("--lan", action="store_true", help="scan every router-known device instead of the public IP")
     ps.add_argument("--target", help="scan a single explicit IP")
-    ps.add_argument("--timeout", type=float, default=None, help="per-port timeout seconds")
+    ps.add_argument("--ports", default=None,
+                    help="port spec: 'default' (LAN), 'wan', 'top1024', 'all', '22,80,443', or '1-1024'")
+    ps.add_argument("--timeout", type=float, default=None, help="per-port first-pass timeout in seconds")
+    ps.add_argument("--retry-timeout", type=float, default=None,
+                    help="second-pass timeout for initially-timed-out ports (0 to disable retry)")
     ps.add_argument("--workers", type=int, default=None)
     _add_json(ps); ps.set_defaults(func=c.cmd_portscan)
     sub.add_parser("arpwatch", help="snapshot ARP table, flag conflicts").set_defaults(func=c.cmd_arpwatch)
