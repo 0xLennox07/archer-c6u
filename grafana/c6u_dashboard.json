@@ -1,0 +1,122 @@
+{
+  "title": "c6u — TP-Link Archer C6U",
+  "uid": "c6u-main",
+  "schemaVersion": 38,
+  "version": 1,
+  "editable": true,
+  "timezone": "",
+  "refresh": "30s",
+  "time": {"from": "now-24h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "job",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "PROMETHEUS"},
+        "query": "label_values(c6u_clients_total, job)",
+        "current": {"text": "c6u", "value": "c6u"},
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Clients",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "none"}},
+      "targets": [{"expr": "c6u_clients_total{job=\"$job\"}"}],
+      "datasource": {"type": "prometheus", "uid": "PROMETHEUS"}
+    },
+    {
+      "type": "stat",
+      "title": "Wired / WiFi / Guest",
+      "gridPos": {"h": 4, "w": 8, "x": 4, "y": 0},
+      "targets": [
+        {"expr": "c6u_clients_wired{job=\"$job\"}", "legendFormat": "wired"},
+        {"expr": "c6u_clients_wifi{job=\"$job\"}", "legendFormat": "wifi"},
+        {"expr": "c6u_clients_guest{job=\"$job\"}", "legendFormat": "guest"}
+      ],
+      "datasource": {"type": "prometheus", "uid": "PROMETHEUS"}
+    },
+    {
+      "type": "stat",
+      "title": "CPU",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}},
+      "targets": [{"expr": "c6u_cpu_usage{job=\"$job\"}"}],
+      "datasource": {"type": "prometheus", "uid": "PROMETHEUS"}
+    },
+    {
+      "type": "stat",
+      "title": "Memory",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}},
+      "targets": [{"expr": "c6u_mem_usage{job=\"$job\"}"}],
+      "datasource": {"type": "prometheus", "uid": "PROMETHEUS"}
+    },
+    {
+      "type": "timeseries",
+      "title": "Client count",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "targets": [
+        {"expr": "c6u_clients_total{job=\"$job\"}", "legendFormat": "total"},
+        {"expr": "c6u_clients_wired{job=\"$job\"}", "legendFormat": "wired"},
+        {"expr": "c6u_clients_wifi{job=\"$job\"}", "legendFormat": "wifi"},
+        {"expr": "c6u_clients_guest{job=\"$job\"}", "legendFormat": "guest"}
+      ],
+      "datasource": {"type": "prometheus", "uid": "PROMETHEUS"}
+    },
+    {
+      "type": "timeseries",
+      "title": "Router load",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}},
+      "targets": [
+        {"expr": "c6u_cpu_usage{job=\"$job\"}", "legendFormat": "cpu"},
+        {"expr": "c6u_mem_usage{job=\"$job\"}", "legendFormat": "mem"}
+      ],
+      "datasource": {"type": "prometheus", "uid": "PROMETHEUS"}
+    },
+    {
+      "type": "timeseries",
+      "title": "Top devices — download bps",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "fieldConfig": {"defaults": {"unit": "bps"}},
+      "targets": [{"expr": "topk(10, c6u_device_down_bps{job=\"$job\"})",
+                    "legendFormat": "{{hostname}} ({{mac}})"}],
+      "datasource": {"type": "prometheus", "uid": "PROMETHEUS"}
+    },
+    {
+      "type": "timeseries",
+      "title": "Top devices — upload bps",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "fieldConfig": {"defaults": {"unit": "bps"}},
+      "targets": [{"expr": "topk(10, c6u_device_up_bps{job=\"$job\"})",
+                    "legendFormat": "{{hostname}} ({{mac}})"}],
+      "datasource": {"type": "prometheus", "uid": "PROMETHEUS"}
+    },
+    {
+      "type": "stat",
+      "title": "WAN uptime",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 20},
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "targets": [{"expr": "c6u_wan_uptime_seconds{job=\"$job\"}"}],
+      "datasource": {"type": "prometheus", "uid": "PROMETHEUS"}
+    },
+    {
+      "type": "stat",
+      "title": "Scrape errors",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 20},
+      "targets": [{"expr": "increase(c6u_scrape_errors_total{job=\"$job\"}[1h])"}],
+      "datasource": {"type": "prometheus", "uid": "PROMETHEUS"}
+    },
+    {
+      "type": "table",
+      "title": "WiFi radios (2.4 / 5 / 6)",
+      "gridPos": {"h": 4, "w": 12, "x": 12, "y": 20},
+      "targets": [{"expr": "c6u_wifi_enabled{job=\"$job\"}"}],
+      "datasource": {"type": "prometheus", "uid": "PROMETHEUS"}
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "host": "http://192.168.0.1",
+  "username": "admin",
+  "password": "YOUR_ROUTER_PASSWORD",
+  "verify_ssl": false,
+  "timeout": 30
+}

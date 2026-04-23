@@ -1,0 +1,10 @@
+{
+  "domain": "c6u",
+  "name": "TP-Link Archer C6U",
+  "codeowners": [],
+  "config_flow": false,
+  "documentation": "https://github.com/yourname/c6u",
+  "iot_class": "local_polling",
+  "requirements": ["tplinkrouterc6u>=5.18.1"],
+  "version": "0.1.0"
+}
