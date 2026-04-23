@@ -36,7 +36,9 @@ def run(snap_every: int = 60, latency_every: int = 120,
         extping_every: int | None = 300, automation: bool = True,
         watchdog: bool = False, watchdog_interval: int = 60,
         watchdog_auto_reboot: bool = False,
-        anomaly_every: int | None = 3600) -> None:
+        anomaly_every: int | None = 3600,
+        retention_every: int | None = 86400,
+        dns_filter: bool = False, dns_port: int | None = None) -> None:
     cfg = cfg_mod.load_config()
     webhook_urls = cfg.get("webhooks", []) or []
     mqtt_cfg = cfg.get("mqtt") or {}
@@ -53,7 +55,7 @@ def run(snap_every: int = 60, latency_every: int = 120,
     last_public_ip: str | None = None
 
     def _fire_event(kind: str, **fields) -> None:
-        """Emit to webhooks/DB, then evaluate rules, then Discord mirror."""
+        """Emit to webhooks/DB, evaluate rules, mirror to Discord, route through notifier cooldown."""
         wh_mod.emit(webhook_urls, kind, **fields)
         try:
             from . import rules as rules_mod
@@ -61,11 +63,11 @@ def run(snap_every: int = 60, latency_every: int = 120,
         except Exception as e:
             log.warning("rules dispatch failed: %s", e)
         try:
-            from . import discordbot
-            if (cfg.get("discord") or {}).get("webhook"):
-                discordbot.alert_on_event({"kind": kind, **fields})
+            from . import notifier
+            key = fields.get("mac") or fields.get("current") or fields.get("target") or kind
+            notifier.emit(kind, str(key), title=kind, body=str(fields))
         except Exception as e:
-            log.warning("discord mirror failed: %s", e)
+            log.warning("notifier failed: %s", e)
 
     def snap_tick():
         nonlocal last_macs
@@ -123,6 +125,12 @@ def run(snap_every: int = 60, latency_every: int = 120,
     if anomaly_every:
         threads.append(threading.Thread(target=_every,
             args=(anomaly_every, anomaly_tick, "anomaly", stop), daemon=True))
+    if retention_every:
+        def retention_tick():
+            from . import retention as ret
+            ret.sweep()
+        threads.append(threading.Thread(target=_every,
+            args=(retention_every, retention_tick, "retention", stop), daemon=True))
     if automation:
         from . import automation as auto_mod
         threads.append(threading.Thread(target=auto_mod.run,
@@ -133,13 +141,24 @@ def run(snap_every: int = 60, latency_every: int = 120,
             args=(stop,), kwargs={"interval": watchdog_interval,
                                    "auto_reboot": watchdog_auto_reboot},
             daemon=True, name="watchdog"))
+    if dns_filter:
+        def dns_run():
+            from . import dnsfilter
+            try:
+                dnsfilter.run(port=dns_port)
+            except PermissionError:
+                log.error("DNS filter needs root / elevated privileges to bind :53")
+            except Exception as e:
+                log.error("DNS filter crashed: %s", e)
+        threads.append(threading.Thread(target=dns_run, daemon=True, name="dnsfilter"))
 
     for t in threads:
         t.start()
     console.print(
-        f"[bold green]daemon running[/bold green] — snap={snap_every}s latency={latency_every}s "
+        f"[bold green]daemon running[/bold green] - snap={snap_every}s latency={latency_every}s "
         f"publicip={publicip_every}s extping={extping_every}s anomaly={anomaly_every}s "
-        f"automation={automation} watchdog={watchdog}. Ctrl-C to stop."
+        f"retention={retention_every}s automation={automation} watchdog={watchdog} "
+        f"dns_filter={dns_filter}. Ctrl-C to stop."
     )
     try:
         while not stop.is_set():

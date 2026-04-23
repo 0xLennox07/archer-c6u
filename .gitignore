@@ -15,6 +15,10 @@ tls_pins.json
 c6u-backup-*.tar.gz
 digest.html
 data/
+pcaps/
+wireguard/
+certs/
+acme-webroot/
 __pycache__/
 *.pyc
 .venv/

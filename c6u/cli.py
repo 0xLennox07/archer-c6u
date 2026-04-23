@@ -19,6 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="c6u", description="TP-Link Archer C6U control CLI")
     p.add_argument("--debug", action="store_true", help="verbose logging")
     p.add_argument("--profile", metavar="NAME", help="use profiles/NAME.json instead of config.json")
+    p.add_argument("--fake", action="store_true", help="use simulated router client (no network)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("setup", help="run first-run config wizard").set_defaults(func=c.cmd_setup)
@@ -157,6 +158,9 @@ def build_parser() -> argparse.ArgumentParser:
     dm.add_argument("--watchdog", action="store_true")
     dm.add_argument("--watchdog-interval", type=int, default=60)
     dm.add_argument("--watchdog-auto-reboot", action="store_true")
+    dm.add_argument("--retention", type=int, default=86400, help="seconds between retention sweeps (0 to disable)")
+    dm.add_argument("--dns-filter", action="store_true", help="also run the DNS filter inside the daemon")
+    dm.add_argument("--dns-port", type=int, default=None)
     dm.set_defaults(func=c.cmd_daemon)
 
     # ----- mqtt -----
@@ -317,6 +321,105 @@ def build_parser() -> argparse.ArgumentParser:
     paa = pasub.add_parser("apply"); paa.add_argument("--dry-run", action="store_true")
     paa.set_defaults(func=c.cmd_parental_apply)
 
+    # ===== round-3 commands: DNS + NetFlow + pcap + plugins + ops + anywhere =====
+
+    # DNS filter
+    dn = sub.add_parser("dns", help="mini Pi-hole DNS resolver + filter + logger")
+    dnsub = dn.add_subparsers(dest="dns_cmd", required=True)
+    dnr = dnsub.add_parser("run", help="start the DNS server")
+    dnr.add_argument("--port", type=int, default=None); dnr.set_defaults(func=c.cmd_dns_run)
+    dns_stats = dnsub.add_parser("stats"); dns_stats.add_argument("--days", type=int, default=1)
+    _add_json(dns_stats); dns_stats.set_defaults(func=c.cmd_dns_stats)
+    dbl = dnsub.add_parser("blocklist"); dblsub = dbl.add_subparsers(dest="bl_cmd", required=True)
+    dblsub.add_parser("update").set_defaults(func=c.cmd_dns_blocklist_update)
+
+    # NetFlow
+    nf = sub.add_parser("netflow", help="NetFlow v5/v9 receiver + top-talker report")
+    nfsub = nf.add_subparsers(dest="nf_cmd", required=True)
+    nfr = nfsub.add_parser("run"); nfr.add_argument("--port", type=int, default=2055)
+    nfr.set_defaults(func=c.cmd_netflow_run)
+    nft = nfsub.add_parser("top"); nft.add_argument("--days", type=int, default=1)
+    nft.add_argument("--by", choices=["bytes", "packets", "count"], default="bytes")
+    _add_json(nft); nft.set_defaults(func=c.cmd_netflow_top)
+
+    # pcap
+    pc = sub.add_parser("pcap", help="wireshark/tshark capture wrapper")
+    pcsub = pc.add_subparsers(dest="pcap_cmd", required=True)
+    pcsub.add_parser("interfaces").set_defaults(func=c.cmd_pcap_interfaces)
+    pcb = pcsub.add_parser("burst")
+    pcb.add_argument("interface"); pcb.add_argument("--seconds", type=int, default=30)
+    pcb.add_argument("--filter", dest="filter_bpf", default="")
+    pcb.set_defaults(func=c.cmd_pcap_burst)
+
+    # Passive DNS
+    pd = sub.add_parser("pdns", help="passive DNS lookup (from DNS filter observations)")
+    pd.add_argument("lookup")
+    _add_json(pd); pd.set_defaults(func=c.cmd_pdns)
+
+    # WireGuard / Tailscale
+    vp = sub.add_parser("vpn", help="WireGuard config generator / Tailscale status")
+    vpsub = vp.add_subparsers(dest="vpn_cmd", required=True)
+    vpp = vpsub.add_parser("provision", help="generate server + peer configs")
+    vpp.add_argument("--peers", nargs="+", default=["phone", "laptop"])
+    vpp.add_argument("--network", default="10.77.77.0/24")
+    vpp.add_argument("--port", type=int, default=51820)
+    vpp.add_argument("--endpoint", default=None, help="YOUR_PUBLIC_IP:port")
+    vpp.add_argument("--dns", default=None)
+    vpp.set_defaults(func=c.cmd_vpn_provision)
+    vpsub.add_parser("tailscale", help="show tailscale peer status").set_defaults(func=c.cmd_vpn_tailscale)
+
+    # ACME
+    ac = sub.add_parser("acme", help="Let's Encrypt cert helper (wraps certbot)")
+    acsub = ac.add_subparsers(dest="acme_cmd", required=True)
+    aci = acsub.add_parser("issue")
+    aci.add_argument("--staging", action="store_true")
+    aci.set_defaults(func=c.cmd_acme_issue)
+    acsub.add_parser("renew").set_defaults(func=c.cmd_acme_renew)
+    acsub.add_parser("status").set_defaults(func=c.cmd_acme_status)
+
+    # Self-update
+    sub.add_parser("version", help="show current c6u commit").set_defaults(func=c.cmd_version)
+    up = sub.add_parser("update", help="git pull + pip install -r requirements.txt")
+    up.add_argument("--no-deps", dest="deps", action="store_false", default=True)
+    up.add_argument("--no-pull", dest="pull", action="store_false", default=True)
+    up.set_defaults(func=c.cmd_update)
+
+    # Retention
+    rt3 = sub.add_parser("retention", help="database retention + VACUUM")
+    rtsub = rt3.add_subparsers(dest="ret_cmd", required=True)
+    rtsub.add_parser("sweep").set_defaults(func=c.cmd_retention_sweep)
+    rtsub.add_parser("sizes").set_defaults(func=c.cmd_retention_sizes)
+    rtsub.add_parser("vacuum").set_defaults(func=c.cmd_retention_vacuum)
+
+    # Notifier
+    nt2 = sub.add_parser("notifier", help="unified notification history + cooldowns")
+    nt2sub = nt2.add_subparsers(dest="notif_cmd", required=True)
+    nt2sub.add_parser("recent").set_defaults(func=c.cmd_notifier_recent)
+    nt2t = nt2sub.add_parser("test")
+    nt2t.add_argument("--kind", default="test")
+    nt2t.add_argument("--key", default="manual")
+    nt2t.add_argument("--title", default="c6u test")
+    nt2t.add_argument("--body", default="hello from notifier")
+    nt2t.add_argument("--force", action="store_true")
+    nt2t.set_defaults(func=c.cmd_notifier_test)
+
+    # Audit
+    au3 = sub.add_parser("audit", help="hash-chain the event log")
+    ausub = au3.add_subparsers(dest="audit_cmd", required=True)
+    ausub.add_parser("seal").set_defaults(func=c.cmd_audit_seal)
+    ausub.add_parser("verify").set_defaults(func=c.cmd_audit_verify)
+
+    # Plugins
+    pl = sub.add_parser("plugins", help="list loaded plugins")
+    pl.set_defaults(func=c.cmd_plugins_list)
+
+    # Let plugins register their own CLI commands.
+    try:
+        from . import plugins as _plug
+        _plug.register_cli(sub)
+    except Exception:
+        pass
+
     return p
 
 
@@ -325,6 +428,9 @@ def main(argv: list[str] | None = None) -> None:
     if getattr(args, "profile", None):
         from . import config as _cfg
         _cfg.set_active_profile(args.profile)
+    if getattr(args, "fake", False):
+        from . import fakerouter
+        fakerouter.enable()
     try:
         args.func(args)
     except KeyboardInterrupt:

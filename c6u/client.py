@@ -4,14 +4,27 @@ from __future__ import annotations
 import contextlib
 import logging
 
-from tplinkrouterc6u import TplinkRouterProvider
-
 from .config import load_config
 
 
 @contextlib.contextmanager
 def router(debug: bool = False):
-    """Authenticated router client. Guarantees logout even on error."""
+    """Authenticated router client. Guarantees logout even on error.
+
+    Honors C6U_FAKE=1 (or `c6u --fake`) to swap in a recorded-fixture client,
+    so the entire stack can run offline.
+    """
+    from . import fakerouter
+    if fakerouter.is_enabled():
+        fr = fakerouter.FakeRouter()
+        fr.authorize()
+        try:
+            yield fr
+        finally:
+            fr.logout()
+        return
+
+    from tplinkrouterc6u import TplinkRouterProvider
     cfg = load_config()
     logger = logging.getLogger("c6u")
     if debug and not logger.handlers:

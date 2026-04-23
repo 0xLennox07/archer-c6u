@@ -427,6 +427,9 @@ def cmd_daemon(args) -> None:
         watchdog=getattr(args, "watchdog", False),
         watchdog_interval=getattr(args, "watchdog_interval", 60),
         watchdog_auto_reboot=getattr(args, "watchdog_auto_reboot", False),
+        retention_every=getattr(args, "retention", 86400) or None,
+        dns_filter=getattr(args, "dns_filter", False),
+        dns_port=getattr(args, "dns_port", None),
     )
 
 
@@ -944,3 +947,269 @@ def cmd_parental_apply(args) -> None:
         state = "BLOCK" if d["block"] else "ALLOW"
         note = "" if d["applied"] or args.dry_run else "  [yellow](no firmware method available — logged only)[/yellow]"
         console.print(f"  {d['mac']}: {state}{note}")
+
+
+# ===== round-3 handlers =====
+
+def cmd_dns_run(args) -> None:
+    from . import dnsfilter
+    console.print("[bold green]DNS filter starting[/bold green] - point your router's DHCP DNS at this machine.")
+    dnsfilter.run(port=args.port)
+
+
+def cmd_dns_stats(args) -> None:
+    from . import dnsfilter
+    d = dnsfilter.stats(days=args.days)
+    if getattr(args, "json", False):
+        print(_json.dumps(d, indent=2)); return
+    console.print(f"[bold]queries (last {d['days']}d):[/bold] {d['total']}   "
+                  f"[bold]blocked:[/bold] {d['blocked']} ({d['block_pct']:.1f}%)")
+    from rich.table import Table
+    if d["top_domains"]:
+        t = Table(title="Top domains")
+        t.add_column("Domain"); t.add_column("Queries", justify="right")
+        for r in d["top_domains"]:
+            t.add_row(r["qname"], str(r["n"]))
+        console.print(t)
+    if d["top_blocked"]:
+        t = Table(title="Top blocked")
+        t.add_column("Domain"); t.add_column("Queries", justify="right")
+        for r in d["top_blocked"]:
+            t.add_row(r["qname"], str(r["n"]))
+        console.print(t)
+    if d["top_clients"]:
+        t = Table(title="Top clients")
+        t.add_column("IP"); t.add_column("MAC"); t.add_column("Queries", justify="right")
+        for r in d["top_clients"]:
+            t.add_row(r["client_ip"] or "-", r.get("client_mac") or "-", str(r["n"]))
+        console.print(t)
+
+
+def cmd_dns_blocklist_update(_args) -> None:
+    from . import dnsfilter
+    r = dnsfilter.update_blocklists()
+    console.print(f"[green]loaded {r['total']} blocked domains[/green]")
+    for name, n in r["loaded"].items():
+        console.print(f"  {name}: {n}")
+
+
+def cmd_netflow_run(args) -> None:
+    from . import netflow
+    console.print(f"[bold green]NetFlow receiver on :{args.port}[/bold green] (v5)")
+    netflow.run(port=args.port)
+
+
+def cmd_netflow_top(args) -> None:
+    from . import netflow
+    flows = netflow.top(days=args.days, by=args.by, limit=30)
+    sources = netflow.by_src_ip(days=args.days, limit=30)
+    if getattr(args, "json", False):
+        print(_json.dumps({"flows": flows, "sources": sources}, indent=2)); return
+    from rich.table import Table
+    t = Table(title=f"Top flows by {args.by} ({args.days}d)")
+    for col in ("Src", "Dst", "Proto", "DstPort", "Bytes", "Packets"):
+        t.add_column(col)
+    for r in flows:
+        t.add_row(r["src_ip"], r["dst_ip"], str(r["protocol"]),
+                  str(r["dst_port"]), str(r["tot_bytes"]), str(r["tot_packets"]))
+    console.print(t)
+    t2 = Table(title="Top source IPs")
+    for col in ("Src", "Bytes", "Packets", "Peers"):
+        t2.add_column(col)
+    for r in sources:
+        t2.add_row(r["src_ip"], str(r["tot_bytes"]), str(r["tot_packets"]), str(r["uniq_peers"]))
+    console.print(t2)
+
+
+def cmd_pcap_interfaces(_args) -> None:
+    from . import pcap
+    if not pcap.tshark_available():
+        console.print("[red]tshark not on PATH - install Wireshark.[/red]"); return
+    for i in pcap.list_interfaces():
+        console.print(f"  {i['index']}. {i['name']}")
+
+
+def cmd_pcap_burst(args) -> None:
+    from . import pcap
+    path = pcap.burst_capture(args.interface, seconds=args.seconds, filter_bpf=args.filter_bpf)
+    if path:
+        console.print(f"[green]wrote {path}[/green]")
+    else:
+        console.print("[red]capture failed[/red]")
+
+
+def cmd_pdns(args) -> None:
+    from . import passivedns
+    is_ip = all(p.isdigit() for p in args.lookup.split(".") if p) and args.lookup.count(".") == 3
+    if is_ip:
+        host = passivedns.hostname_for(args.lookup)
+        recs = passivedns.recent(ip=args.lookup)
+        if getattr(args, "json", False):
+            print(_json.dumps({"hostname": host, "records": recs}, indent=2)); return
+        console.print(f"[bold]{args.lookup}[/bold] -> {host or '(unknown)'}")
+    else:
+        recs = passivedns.recent(hostname=args.lookup)
+        if getattr(args, "json", False):
+            print(_json.dumps(recs, indent=2)); return
+        from rich.table import Table
+        t = Table(title=f"Passive DNS matches for {args.lookup!r}")
+        t.add_column("IP"); t.add_column("Hostname"); t.add_column("Last seen")
+        import datetime
+        for r in recs:
+            when = datetime.datetime.fromtimestamp(r["last_seen"]).strftime("%Y-%m-%d %H:%M")
+            t.add_row(r["ip"], r["hostname"], when)
+        console.print(t)
+
+
+def cmd_vpn_provision(args) -> None:
+    from . import vpn
+    r = vpn.provision(peer_names=args.peers, network=args.network,
+                       listen_port=args.port, endpoint=args.endpoint, dns=args.dns)
+    console.print(f"[green]wrote {r['server_config']}[/green]")
+    console.print(f"server public key: [bold]{r['server_public']}[/bold]")
+    console.print(f"network: {r['network']}  listen_port: {r['listen_port']}")
+    console.print("[bold]Peers:[/bold]")
+    for p in r["peers"]:
+        console.print(f"  {p['name']}: {p['address']}  cfg={p['config']}" + (f"  QR={p['qr']}" if p["qr"] else ""))
+    console.print("[yellow]To start the server:[/yellow] copy wg0.conf to /etc/wireguard/ and `wg-quick up wg0`")
+
+
+def cmd_vpn_tailscale(_args) -> None:
+    from . import vpn
+    r = vpn.tailscale_status()
+    if r is None:
+        console.print("[yellow]tailscale not installed or not running[/yellow]"); return
+    self_n = (r.get("Self") or {})
+    console.print(f"[bold]Self[/bold]: {self_n.get('HostName')} ({self_n.get('TailscaleIPs', [''])[0]})")
+    peers = (r.get("Peer") or {})
+    for p in peers.values():
+        online = "[green]online[/green]" if p.get("Online") else "[red]offline[/red]"
+        console.print(f"  {p.get('HostName')}  {p.get('TailscaleIPs', [''])[0]}  {online}")
+
+
+def cmd_acme_issue(args) -> None:
+    from . import acme
+    r = acme.issue(staging=args.staging)
+    if not r.get("ok"):
+        console.print(f"[red]{r.get('error')}[/red]"); return
+    console.print(f"[green]cert:[/green] {r.get('cert')}")
+    console.print(f"[green]key:[/green]  {r.get('key')}")
+    console.print(f"[green]domain:[/green] {r.get('domain')}")
+
+
+def cmd_acme_renew(_args) -> None:
+    from . import acme
+    r = acme.renew()
+    console.print("[green]renewed[/green]" if r["ok"] else f"[red]{r.get('err') or r.get('log')}[/red]")
+
+
+def cmd_acme_status(_args) -> None:
+    from . import acme
+    a = acme.active_cert()
+    if not a:
+        console.print("[yellow]no cert in certs/ - run `c6u acme issue`[/yellow]"); return
+    console.print(f"cert: {a['cert']}")
+    console.print(f"key:  {a['key']}")
+
+
+def cmd_version(_args) -> None:
+    from . import update as upd
+    v = upd.current_version()
+    if not v.get("commit"):
+        console.print("[yellow](not a git checkout)[/yellow]"); return
+    console.print(f"{v['commit'][:10]}  {v['subject']}")
+    console.print(f"[mute]{v['committed']}[/mute]")
+
+
+def cmd_update(args) -> None:
+    from . import update as upd
+    r = upd.update(pull=args.pull, deps=args.deps)
+    if not r.get("ok"):
+        console.print(f"[red]{r.get('error')}[/red]"); return
+    if r["changed"]:
+        console.print(f"[green]updated {r['before']['commit'][:10]} -> {r['after']['commit'][:10]}[/green]")
+    else:
+        console.print("[yellow]already up to date[/yellow]")
+    for line in r.get("log", []):
+        console.print(f"[mute]{line}[/mute]")
+
+
+def cmd_retention_sweep(_args) -> None:
+    from . import retention
+    r = retention.sweep()
+    console.print("[green]sweep done[/green]")
+    for t, n in (r.get("deleted") or {}).items():
+        if n:
+            console.print(f"  {t}: deleted {n}")
+
+
+def cmd_retention_sizes(_args) -> None:
+    from . import retention
+    s = retention.sizes()
+    from rich.table import Table
+    t = Table(title=f"Row counts ({len(s)} tables)")
+    t.add_column("Table"); t.add_column("Rows", justify="right")
+    for name, n in sorted(s.items()):
+        t.add_row(name, str(n))
+    console.print(t)
+
+
+def cmd_retention_vacuum(_args) -> None:
+    from . import retention
+    retention.vacuum()
+    console.print("[green]VACUUM done[/green]")
+
+
+def cmd_notifier_recent(_args) -> None:
+    from . import notifier
+    import datetime
+    rows = notifier.recent()
+    from rich.table import Table
+    t = Table(title="Recent notifications")
+    for col in ("Kind", "Key", "Last", "Count"): t.add_column(col)
+    for r in rows:
+        t.add_row(r["kind"], r["key"],
+                  datetime.datetime.fromtimestamp(r["last_ts"]).strftime("%m-%d %H:%M:%S"),
+                  str(r["count"]))
+    console.print(t)
+
+
+def cmd_notifier_test(args) -> None:
+    from . import notifier
+    r = notifier.emit(args.kind, args.key, args.title, args.body, force=args.force)
+    console.print(_json.dumps(r, indent=2))
+
+
+def cmd_audit_seal(_args) -> None:
+    from . import audit
+    r = audit.seal()
+    if r.get("sealed", 0) == 0:
+        console.print("[yellow](nothing new to seal)[/yellow]"); return
+    console.print(f"[green]sealed {r['sealed']} events[/green] ({r['start_id']}..{r['end_id']})")
+    console.print(f"tip: [bold]{r['final_hash'][:16]}...[/bold]")
+
+
+def cmd_audit_verify(_args) -> None:
+    from . import audit
+    r = audit.verify()
+    if r.get("ok"):
+        console.print(f"[green]audit OK[/green] ({r['seals']} seals)")
+        if r.get("chain_tip"):
+            console.print(f"tip: [mute]{r['chain_tip'][:16]}...[/mute]")
+    else:
+        console.print(f"[bold red]AUDIT FAILED[/bold red] at seal {r['failed_at']['ts']}")
+        console.print(f"reason: {r['reason']}")
+
+
+def cmd_plugins_list(_args) -> None:
+    from . import plugins
+    info = plugins.info()
+    if not info:
+        console.print("[yellow]no plugins in plugins/[/yellow]")
+        console.print("[mute](see plugins/example_hello.py for a template)[/mute]"); return
+    from rich.table import Table
+    t = Table(title=f"Plugins ({len(info)})")
+    for col in ("File", "Doc", "Hooks"): t.add_column(col)
+    for p in info:
+        t.add_row(p["file"], p["doc"] or "-", ", ".join(p["hooks"]) or "-")
+    console.print(t)

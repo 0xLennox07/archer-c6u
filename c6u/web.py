@@ -56,8 +56,11 @@ INDEX_HTML = """
   canvas { max-height: 220px; }
 </style></head>
 <body>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#111111">
+<script>if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});</script>
 <h1>c6u router dashboard</h1>
-<nav><a href="/">Live</a><a href="/history">History</a><a href="/heatmaps">Heatmaps</a><a href="/security">Security</a><a href="/digest">Digest</a><a href="/discover">Discovered</a></nav>
+<nav><a href="/">Live</a><a href="/history">History</a><a href="/heatmaps">Heatmaps</a><a href="/security">Security</a><a href="/dns">DNS</a><a href="/flows">Flows</a><a href="/rules">Rules</a><a href="/digest">Digest</a><a href="/discover">Discovered</a></nav>
 <p class="mute" id="updated">loading… <span id="wsstatus"></span></p>
 <div class="grid">
   <div class="card"><h2>Status</h2><div id="status"></div>
@@ -483,11 +486,153 @@ def api_rules():
     return {"rules": rules.load_rules()}
 
 
+@app.post("/api/rules/save")
+def api_rules_save(body: dict):
+    """Overwrite rules.json with the submitted rule list."""
+    import json
+    from . import config as _cfg
+    rules_list = (body or {}).get("rules") or []
+    path = _cfg.ROOT / "rules.json"
+    path.write_text(json.dumps({"rules": rules_list}, indent=2), encoding="utf-8")
+    return {"ok": True, "count": len(rules_list), "path": str(path)}
+
+
+@app.post("/api/rules/test")
+def api_rules_test(body: dict):
+    from . import rules
+    evt = body.get("event") or {}
+    only_rules = body.get("rules")  # optionally test with unsaved in-memory rules
+    fired = rules.dispatch(evt, cfg={}, rules=only_rules)
+    return {"fired": fired, "event": evt}
+
+
 @app.get("/api/automation")
 def api_automation():
     from . import automation
     return {"jobs": [{k: v for k, v in j.items() if not k.startswith("_")}
                        for j in automation.load_jobs()]}
+
+
+@app.post("/api/automation/save")
+def api_automation_save(body: dict):
+    import json
+    from . import config as _cfg
+    jobs = (body or {}).get("jobs") or []
+    clean = [{k: v for k, v in j.items() if not k.startswith("_")} for j in jobs]
+    path = _cfg.ROOT / "automation.json"
+    path.write_text(json.dumps({"jobs": clean}, indent=2), encoding="utf-8")
+    return {"ok": True, "count": len(clean), "path": str(path)}
+
+
+# ----- DNS filter, NetFlow, passive DNS endpoints -----
+
+@app.get("/api/dns/stats")
+def api_dns_stats(days: int = 1):
+    from . import dnsfilter
+    return dnsfilter.stats(days=days)
+
+
+@app.post("/api/dns/blocklist/update")
+def api_dns_blocklist_update():
+    from . import dnsfilter
+    return dnsfilter.update_blocklists()
+
+
+@app.get("/api/flows/top")
+def api_flows_top(days: int = 1, by: str = "bytes", limit: int = 20):
+    from . import netflow
+    return {"flows": netflow.top(days=days, by=by, limit=limit),
+            "sources": netflow.by_src_ip(days=days, limit=limit)}
+
+
+@app.get("/api/pdns")
+def api_pdns(ip: str | None = None, hostname: str | None = None, limit: int = 100):
+    from . import passivedns
+    return {"records": passivedns.recent(ip=ip, hostname=hostname, limit=limit)}
+
+
+# ----- Plugin info + PWA manifest/service worker -----
+
+@app.get("/api/plugins")
+def api_plugins():
+    from . import plugins
+    return {"plugins": plugins.info()}
+
+
+@app.get("/manifest.webmanifest")
+def pwa_manifest():
+    return JSONResponse({
+        "name": "c6u router",
+        "short_name": "c6u",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#111111",
+        "theme_color": "#111111",
+        "icons": [
+            {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"},
+        ],
+    })
+
+
+@app.get("/sw.js", response_class=PlainTextResponse)
+def pwa_sw():
+    return PlainTextResponse("""
+self.addEventListener('install', e => self.skipWaiting());
+self.addEventListener('activate', e => self.clients.claim());
+const CACHE = 'c6u-v1';
+self.addEventListener('fetch', e => {
+  const r = e.request;
+  if (r.method !== 'GET') return;
+  e.respondWith(
+    caches.open(CACHE).then(async cache => {
+      try {
+        const resp = await fetch(r);
+        if (resp.ok) cache.put(r, resp.clone());
+        return resp;
+      } catch (err) {
+        const cached = await cache.match(r);
+        if (cached) return cached;
+        throw err;
+      }
+    })
+  );
+});
+""", media_type="application/javascript")
+
+
+@app.get("/icon-192.png")
+def icon_192():
+    from io import BytesIO
+    from fastapi.responses import Response
+    try:
+        from PIL import Image, ImageDraw
+        img = Image.new("RGB", (192, 192), (17, 17, 17))
+        d = ImageDraw.Draw(img)
+        d.rectangle((12, 12, 180, 180), outline=(100, 180, 255), width=6)
+        d.text((62, 74), "c6u", fill=(100, 180, 255))
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        return Response(content=buf.getvalue(), media_type="image/png")
+    except Exception:
+        return Response(status_code=404)
+
+
+@app.get("/icon-512.png")
+def icon_512():
+    from io import BytesIO
+    from fastapi.responses import Response
+    try:
+        from PIL import Image, ImageDraw
+        img = Image.new("RGB", (512, 512), (17, 17, 17))
+        d = ImageDraw.Draw(img)
+        d.rectangle((32, 32, 480, 480), outline=(100, 180, 255), width=14)
+        d.text((180, 220), "c6u", fill=(100, 180, 255))
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        return Response(content=buf.getvalue(), media_type="image/png")
+    except Exception:
+        return Response(status_code=404)
 
 
 # ----- WebSocket live updates -----
@@ -649,8 +794,176 @@ async function anoc(){document.getElementById('anom').textContent='scanning…';
 """
 
 
+RULES_HTML = """
+<!doctype html><html><head><meta charset=utf-8><title>rules</title>
+<style>:root{color-scheme:dark light;}
+body{font:14px/1.4 system-ui,sans-serif;margin:0;padding:20px;max-width:1100px;}
+nav a{margin-right:14px;color:#48f;text-decoration:none;}
+.rule{border:1px solid #8884;border-radius:8px;padding:14px;margin-top:12px;}
+textarea{width:100%;min-height:360px;background:#111;color:#ddd;border:1px solid #333;border-radius:6px;padding:10px;font-family:ui-monospace,Consolas,monospace;font-size:12px;}
+button{padding:8px 14px;border:1px solid #8884;background:transparent;color:inherit;border-radius:6px;cursor:pointer;margin-right:6px;}
+button:hover{background:#8882;}
+.pill{display:inline-block;padding:2px 8px;border-radius:10px;background:#8882;font-size:11px;}
+input{padding:6px 8px;background:transparent;color:inherit;border:1px solid #8884;border-radius:4px;}
+pre{background:#111;padding:10px;border-radius:6px;overflow:auto;}
+</style></head><body>
+<nav><a href="/">Live</a><a href="/history">History</a><a href="/heatmaps">Heatmaps</a><a href="/security">Security</a><a href="/dns">DNS</a><a href="/flows">Flows</a><a href="/rules">Rules</a><a href="/digest">Digest</a></nav>
+<h1>Rules &amp; automation</h1>
+<p class=mute>Edit <code>rules.json</code> and <code>automation.json</code> live. Save writes to disk; the daemon picks up new rules on next event dispatch.</p>
+
+<h2>Rules</h2>
+<textarea id=rules>loading…</textarea>
+<div style="margin-top:8px">
+  <button onclick=saveRules()>Save rules</button>
+  <button onclick=loadRules()>Reload</button>
+  <span class=pill id=rstatus></span>
+</div>
+
+<h3>Test console</h3>
+<div class=rule>
+  <label>Synthetic event (JSON):</label>
+  <textarea id=evt style=min-height:120px>{"kind": "device_joined", "mac": "AA:BB:CC:00:00:99", "hostname": "testdev"}</textarea>
+  <button onclick=testRules()>Dispatch</button>
+  <span class=pill id=testresult></span>
+</div>
+
+<h2>Automation</h2>
+<textarea id=auto>loading…</textarea>
+<div style="margin-top:8px">
+  <button onclick=saveAuto()>Save automation</button>
+  <button onclick=loadAuto()>Reload</button>
+  <span class=pill id=astatus></span>
+</div>
+
+<script>
+async function loadRules(){
+  const d=await(await fetch('/api/rules')).json();
+  document.getElementById('rules').value = JSON.stringify(d.rules||[], null, 2);
+  document.getElementById('rstatus').textContent = (d.rules||[]).length+' rules';
+}
+async function saveRules(){
+  let rules;
+  try{ rules = JSON.parse(document.getElementById('rules').value); }
+  catch(e){ document.getElementById('rstatus').textContent = 'JSON error: '+e.message; return; }
+  const r=await fetch('/api/rules/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rules})});
+  const d=await r.json();
+  document.getElementById('rstatus').textContent = d.ok?('saved '+d.count+' rules'):'save failed';
+}
+async function testRules(){
+  let evt, rules;
+  try{ evt = JSON.parse(document.getElementById('evt').value); }
+  catch(e){ document.getElementById('testresult').textContent='bad event JSON'; return; }
+  try{ rules = JSON.parse(document.getElementById('rules').value); }
+  catch(e){ rules = undefined; }
+  const r=await fetch('/api/rules/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({event:evt, rules})});
+  const d=await r.json();
+  document.getElementById('testresult').textContent = d.fired+' action(s) fired';
+}
+async function loadAuto(){
+  const d=await(await fetch('/api/automation')).json();
+  document.getElementById('auto').value = JSON.stringify(d.jobs||[], null, 2);
+  document.getElementById('astatus').textContent = (d.jobs||[]).length+' jobs';
+}
+async function saveAuto(){
+  let jobs;
+  try{ jobs = JSON.parse(document.getElementById('auto').value); }
+  catch(e){ document.getElementById('astatus').textContent='JSON error: '+e.message; return; }
+  const r=await fetch('/api/automation/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobs})});
+  const d=await r.json();
+  document.getElementById('astatus').textContent = d.ok?('saved '+d.count+' jobs'):'save failed';
+}
+loadRules(); loadAuto();
+</script></body></html>
+"""
+
+DNS_HTML = """
+<!doctype html><html><head><meta charset=utf-8><title>DNS</title>
+<style>:root{color-scheme:dark light;}
+body{font:14px/1.4 system-ui,sans-serif;margin:0;padding:20px;max-width:1200px;}
+nav a{margin-right:14px;color:#48f;text-decoration:none;}
+.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;}
+@media(max-width:900px){.grid{grid-template-columns:1fr;}}
+.card{border:1px solid #8884;border-radius:8px;padding:14px;}
+.card h2{margin:0 0 8px;font-size:13px;color:#8aa;text-transform:uppercase;letter-spacing:.04em;}
+table{border-collapse:collapse;width:100%;font-size:13px;}th,td{padding:4px 6px;text-align:left;border-bottom:1px solid #8882;}
+.big{font-size:28px;font-weight:600;}
+.mute{color:#888;}button{padding:6px 12px;border:1px solid #8884;background:transparent;color:inherit;border-radius:6px;cursor:pointer;}
+</style></head><body>
+<nav><a href="/">Live</a><a href="/history">History</a><a href="/heatmaps">Heatmaps</a><a href="/security">Security</a><a href="/dns">DNS</a><a href="/flows">Flows</a><a href="/rules">Rules</a></nav>
+<h1>DNS filter stats</h1>
+<p class=mute>Queries logged when you run <code>c6u dns run</code> and point your router's DNS at this machine. <button onclick=updateList()>Update blocklist</button> <span id=listmsg></span></p>
+<div class=grid>
+  <div class=card><h2>Total</h2><div class=big id=total>-</div><div class=mute>queries (last 24h)</div></div>
+  <div class=card><h2>Blocked</h2><div class=big id=blocked>-</div><div class=mute id=blockpct>-</div></div>
+  <div class=card><h2>Uniques</h2><div class=big id=uniq>-</div><div class=mute>top domains below</div></div>
+</div>
+<div class=grid style=margin-top:16px>
+  <div class=card><h2>Top domains</h2><table id=tdom></table></div>
+  <div class=card><h2>Top blocked</h2><table id=tblk></table></div>
+  <div class=card><h2>Top clients</h2><table id=tcli></table></div>
+</div>
+<script>
+async function load(){
+  const d=await(await fetch('/api/dns/stats?days=1')).json();
+  document.getElementById('total').textContent = d.total.toLocaleString();
+  document.getElementById('blocked').textContent = d.blocked.toLocaleString();
+  document.getElementById('blockpct').textContent = d.block_pct.toFixed(1)+'% blocked';
+  document.getElementById('uniq').textContent = (d.top_domains||[]).length;
+  document.getElementById('tdom').innerHTML = (d.top_domains||[]).map(r=>`<tr><td>${r.qname}</td><td>${r.n}</td></tr>`).join('') || '<tr><td class=mute>no data yet</td></tr>';
+  document.getElementById('tblk').innerHTML = (d.top_blocked||[]).map(r=>`<tr><td>${r.qname}</td><td>${r.n}</td></tr>`).join('') || '<tr><td class=mute>no blocks</td></tr>';
+  document.getElementById('tcli').innerHTML = (d.top_clients||[]).map(r=>`<tr><td>${r.client_ip} ${r.client_mac||''}</td><td>${r.n}</td></tr>`).join('') || '<tr><td class=mute>no clients</td></tr>';
+}
+async function updateList(){document.getElementById('listmsg').textContent='updating…';
+  const d=await(await fetch('/api/dns/blocklist/update',{method:'POST'})).json();
+  document.getElementById('listmsg').textContent = 'loaded '+d.total+' domains';
+}
+load(); setInterval(load, 15000);
+</script></body></html>
+"""
+
+FLOWS_HTML = """
+<!doctype html><html><head><meta charset=utf-8><title>flows</title>
+<style>:root{color-scheme:dark light;}
+body{font:14px/1.4 system-ui,sans-serif;margin:0;padding:20px;max-width:1200px;}
+nav a{margin-right:14px;color:#48f;text-decoration:none;}
+.card{border:1px solid #8884;border-radius:8px;padding:14px;margin-top:16px;}
+.card h2{margin:0 0 8px;font-size:13px;color:#8aa;text-transform:uppercase;letter-spacing:.04em;}
+table{border-collapse:collapse;width:100%;font-size:13px;}th,td{padding:4px 6px;text-align:left;border-bottom:1px solid #8882;}
+.mono{font-family:ui-monospace,Consolas,monospace;}
+</style></head><body>
+<nav><a href="/">Live</a><a href="/history">History</a><a href="/heatmaps">Heatmaps</a><a href="/security">Security</a><a href="/dns">DNS</a><a href="/flows">Flows</a><a href="/rules">Rules</a></nav>
+<h1>NetFlow top talkers</h1>
+<p class=mute>Populated when a switch/router exports flow records to <code>c6u netflow run</code> (UDP port 2055).</p>
+<div class=card><h2>Top flows by bytes (24h)</h2><table id=ttop></table></div>
+<div class=card><h2>Top source IPs by total bytes (24h)</h2><table id=tsrc></table></div>
+<script>
+function fmt(b){if(!b)return '-';const u=['B','KB','MB','GB','TB'];let i=0,v=+b;while(v>=1024&&i<u.length-1){v/=1024;i++;}return v.toFixed(1)+' '+u[i];}
+async function load(){
+  const d=await(await fetch('/api/flows/top?days=1&limit=30')).json();
+  document.getElementById('ttop').innerHTML = '<tr><th>Src</th><th>Dst</th><th>Proto</th><th>Dst port</th><th>Bytes</th><th>Packets</th></tr>'+
+    (d.flows||[]).map(r=>`<tr><td class=mono>${r.src_ip}</td><td class=mono>${r.dst_ip}</td><td>${r.protocol}</td><td>${r.dst_port}</td><td>${fmt(r.tot_bytes)}</td><td>${r.tot_packets}</td></tr>`).join('') || '<tr><td>no flows yet</td></tr>';
+  document.getElementById('tsrc').innerHTML = '<tr><th>Source IP</th><th>Bytes</th><th>Packets</th><th>Unique peers</th></tr>'+
+    (d.sources||[]).map(r=>`<tr><td class=mono>${r.src_ip}</td><td>${fmt(r.tot_bytes)}</td><td>${r.tot_packets}</td><td>${r.uniq_peers}</td></tr>`).join('') || '<tr><td>no flows</td></tr>';
+}
+load();
+</script></body></html>
+"""
+
+
 @app.get("/heatmaps", response_class=HTMLResponse)
 def heatmap_page(): return HTMLResponse(HEATMAP_HTML)
+
+
+@app.get("/rules", response_class=HTMLResponse)
+def rules_page(): return HTMLResponse(RULES_HTML)
+
+
+@app.get("/dns", response_class=HTMLResponse)
+def dns_page(): return HTMLResponse(DNS_HTML)
+
+
+@app.get("/flows", response_class=HTMLResponse)
+def flows_page(): return HTMLResponse(FLOWS_HTML)
 
 
 @app.get("/security", response_class=HTMLResponse)
@@ -663,6 +976,19 @@ def digest_page(days: int = 7):
     return HTMLResponse(digest_mod.build(days=days))
 
 
-def serve(host: str = "127.0.0.1", port: int = 8000) -> None:
+def serve(host: str = "127.0.0.1", port: int = 8000, ssl: bool = False) -> None:
     import uvicorn
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    try:
+        from . import plugins
+        plugins.register_web(app)
+    except Exception:
+        pass
+    kwargs = {"host": host, "port": port, "log_level": "info"}
+    if ssl:
+        from . import acme
+        active = acme.active_cert()
+        if not active:
+            raise RuntimeError("ssl=True but no cert in certs/; run `c6u acme issue` first")
+        kwargs["ssl_certfile"] = active["cert"]
+        kwargs["ssl_keyfile"] = active["key"]
+    uvicorn.run(app, **kwargs)
