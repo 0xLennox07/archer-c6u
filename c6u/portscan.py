@@ -12,8 +12,19 @@ COMMON_PORTS = (21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443,
                 3389, 5000, 5432, 5900, 6379, 8000, 8008, 8080, 8443,
                 8888, 9000, 9090, 27017, 32400)
 
-# LAN-facing — wider net; common IoT / media / admin / P2P ports included.
+# LAN-facing default — tight set of ~48 ports every household device might run.
+# Previous 178-port set is kept as LAN_PORTS_WIDE and available via --ports wide.
 LAN_PORTS = (
+    21, 22, 23, 25, 53, 80, 81, 88, 135, 139, 143, 389, 443, 445,
+    515, 554, 587, 631, 873, 993, 995, 1433, 1723, 1883, 1900,
+    2049, 3306, 3389, 5000, 5353, 5432, 5555, 5900, 6379, 7000,
+    8000, 8008, 8009, 8060, 8080, 8123, 8443, 8554, 8888, 9100,
+    22000, 27017, 32400,
+)
+
+# Wider set — former default. Useful when you know a device is alive and
+# want a second pass on less-common ports.
+LAN_PORTS_WIDE = (
     21, 22, 23, 25, 53, 80, 81, 88, 110, 111, 113, 119, 123, 135, 137, 139,
     143, 161, 162, 179, 194, 199, 389, 427, 443, 444, 445, 465, 500, 515,
     548, 554, 587, 631, 636, 873, 902, 993, 995, 1080, 1194, 1433, 1434,
@@ -31,8 +42,8 @@ LAN_PORTS = (
     50000, 51413, 52869, 54235, 55443, 62078, 64738, 65000, 65535,
 )
 
-# Well-known / system ports (1–1023) + the LAN_PORTS extras.
-TOP1024_PLUS = tuple(sorted(set(LAN_PORTS) | set(range(1, 1024))))
+# Well-known / system ports (1-1023) + the LAN_PORTS_WIDE extras.
+TOP1024_PLUS = tuple(sorted(set(LAN_PORTS_WIDE) | set(range(1, 1024))))
 
 _OPEN, _CLOSED, _TIMEOUT = "open", "closed", "timeout"
 
@@ -72,16 +83,31 @@ def _run_checks(tasks, timeout, workers):
 
 def _scan_with_retry(tasks, timeout, workers, retry_timeout) -> dict[tuple[str, int], str]:
     """Two-pass scan: quick first, then re-check timeouts with a longer
-    timeout to weed out false negatives on dozing devices.
+    timeout — but ONLY on hosts that gave at least one definitive answer
+    (OPEN or CLOSED) in the first pass. Hosts that silently dropped every
+    probe are treated as offline / firewalled and we don't waste time retrying.
     """
     result: dict[tuple[str, int], str] = {}
     for ip, port, state in _run_checks(tasks, timeout, workers):
         result[(ip, port)] = state
-    to_retry = [(ip, p) for (ip, p), s in result.items() if s == _TIMEOUT]
+    responsive_hosts = {
+        ip for (ip, _), s in result.items() if s in (_OPEN, _CLOSED)
+    }
+    to_retry = [(ip, p) for (ip, p), s in result.items()
+                if s == _TIMEOUT and ip in responsive_hosts]
     if to_retry and retry_timeout > timeout:
         for ip, port, state in _run_checks(to_retry, retry_timeout, max(1, workers // 2)):
             result[(ip, port)] = state
     return result
+
+
+def _host_alive(ip: str, ping_timeout: float = 1.0) -> bool:
+    """Quick reachability check: ICMP ping, with a TCP fallback to :80 in
+    case the host answers TCP but drops ICMP (unusual but happens)."""
+    from . import latency as latency_mod
+    if latency_mod.ping_once(ip, timeout=ping_timeout) is not None:
+        return True
+    return _probe(ip, 80, 0.4)[2] in (_OPEN, _CLOSED)
 
 
 def parse_ports(spec: str) -> tuple[int, ...]:
@@ -89,6 +115,8 @@ def parse_ports(spec: str) -> tuple[int, ...]:
     spec = (spec or "").strip().lower()
     if spec in ("", "default", "lan"):
         return LAN_PORTS
+    if spec in ("wide", "full"):
+        return LAN_PORTS_WIDE
     if spec == "wan":
         return COMMON_PORTS
     if spec == "all":
@@ -133,9 +161,18 @@ def scan_host(ip: str, ports=LAN_PORTS, timeout: float = 1.0,
     return sorted(p for (_, p), s in states.items() if s == _OPEN)
 
 
-def scan_lan(ports=LAN_PORTS, timeout: float = 1.0, workers: int = 48,
-             retry_timeout: float = 2.5, include_gateway: bool = True) -> dict:
-    """Scan every router-known device (and the router itself) in parallel."""
+def scan_lan(ports=LAN_PORTS, timeout: float = 0.5, workers: int = 64,
+             retry_timeout: float = 1.5, include_gateway: bool = True,
+             liveness: bool = True) -> dict:
+    """Scan every router-known device (and the router itself) in parallel.
+
+    Optimizations over a naive all-pairs scan:
+      1. Pre-flight ICMP + TCP liveness check — silent hosts are marked
+         offline and skipped entirely (saves len(ports) * timeout per dead host).
+      2. Short first-pass timeout (0.5s) — LAN RTT is well under 10ms.
+      3. Smart retry — second, longer pass only re-probes ports on hosts
+         that gave at least one definitive answer in pass 1.
+    """
     from .client import router
     from . import aliases as aliases_mod
     from . import vendor as vendor_mod
@@ -161,12 +198,30 @@ def scan_lan(ports=LAN_PORTS, timeout: float = 1.0, workers: int = 48,
             "vendor": vendor_mod.vendor(mac) or "",
         })
     if include_gateway and wan is not None:
-        gw_ip = getattr(wan, "lan_ipv4_ipaddr", None) or getattr(wan, "lan_ipv4_address", None)
+        # tplinkrouterc6u uses `lan_ipv4_ipaddress`; keep the older aliases
+        # as fallbacks so the fake router / older lib versions still work.
+        gw_ip = (
+            getattr(wan, "lan_ipv4_ipaddress", None)
+            or getattr(wan, "lan_ipv4_ipaddr", None)
+            or getattr(wan, "lan_ipv4_address", None)
+        )
         if gw_ip and not any(t["ip"] == str(gw_ip) for t in targets):
             targets.insert(0, {"mac": "", "hostname": "(router)",
                                 "ip": str(gw_ip), "alias": "router", "vendor": "TP-Link"})
 
-    tasks = [(t["ip"], p) for t in targets for p in ports]
+    # --- pre-flight liveness sweep ---
+    if liveness and targets:
+        with ThreadPoolExecutor(max_workers=min(32, len(targets))) as ex:
+            alive_map = dict(zip(
+                (t["ip"] for t in targets),
+                ex.map(_host_alive, (t["ip"] for t in targets)),
+            ))
+    else:
+        alive_map = {t["ip"]: True for t in targets}
+
+    live_targets = [t for t in targets if alive_map.get(t["ip"])]
+
+    tasks = [(t["ip"], p) for t in live_targets for p in ports]
     states = _scan_with_retry(tasks, timeout, workers, retry_timeout)
     open_by_ip: dict[str, list[int]] = {t["ip"]: [] for t in targets}
     timeout_by_ip: dict[str, int] = {t["ip"]: 0 for t in targets}
@@ -177,11 +232,15 @@ def scan_lan(ports=LAN_PORTS, timeout: float = 1.0, workers: int = 48,
             timeout_by_ip[ip] = timeout_by_ip.get(ip, 0) + 1
 
     for t in targets:
-        t["open"] = sorted(open_by_ip.get(t["ip"], []))
-        t["timed_out"] = timeout_by_ip.get(t["ip"], 0)
+        ip = t["ip"]
+        t["alive"] = bool(alive_map.get(ip))
+        t["open"] = sorted(open_by_ip.get(ip, []))
+        t["timed_out"] = timeout_by_ip.get(ip, 0)
     return {
         "devices": targets,
         "checked_per_host": len(ports),
+        "live_hosts": len(live_targets),
+        "total_hosts": len(targets),
         "total_checks": len(tasks),
         "reachable_hosts": sum(1 for t in targets if t["open"]),
         "total_timeouts": sum(timeout_by_ip.values()),

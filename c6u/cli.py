@@ -261,7 +261,7 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--lan", action="store_true", help="scan every router-known device instead of the public IP")
     ps.add_argument("--target", help="scan a single explicit IP")
     ps.add_argument("--ports", default=None,
-                    help="port spec: 'default' (LAN), 'wan', 'top1024', 'all', '22,80,443', or '1-1024'")
+                    help="port spec: 'default'/'lan' (~48 common), 'wide' (~178), 'top1024', 'all', 'wan', '22,80,443', or '1-1024'")
     ps.add_argument("--timeout", type=float, default=None, help="per-port first-pass timeout in seconds")
     ps.add_argument("--retry-timeout", type=float, default=None,
                     help="second-pass timeout for initially-timed-out ports (0 to disable retry)")

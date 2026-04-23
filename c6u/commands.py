@@ -714,16 +714,18 @@ def cmd_portscan(args) -> None:
         if getattr(args, "json", False):
             print(_json.dumps(r, indent=2)); return
         from rich.table import Table
-        t = Table(title=f"LAN port scan ({len(r['devices'])} hosts × {r['checked_per_host']} ports, "
-                        f"{r.get('total_timeouts', 0)} timeouts)")
-        for col in ("Name", "Hostname", "IP", "MAC", "Vendor", "Open ports"):
+        t = Table(title=f"LAN port scan ({r.get('live_hosts', len(r['devices']))}/"
+                        f"{r.get('total_hosts', len(r['devices']))} alive × "
+                        f"{r['checked_per_host']} ports, {r.get('total_timeouts', 0)} timeouts)")
+        for col in ("Name", "Hostname", "IP", "MAC", "Vendor", "Alive", "Open ports"):
             t.add_column(col)
         for d in r["devices"]:
             open_s = ", ".join(str(p) for p in d["open"]) or "[dim]-[/dim]"
             if portscan.RISKY_LAN_PORTS.intersection(d["open"]):
                 open_s = "[bold red]" + ", ".join(str(p) for p in d["open"]) + "[/bold red]"
+            alive_s = ("[green]yes[/green]" if d.get("alive", True) else "[dim]no[/dim]")
             t.add_row(d.get("alias") or "-", d["hostname"] or "-", d["ip"],
-                      d["mac"] or "-", d["vendor"] or "-", open_s)
+                      d["mac"] or "-", d["vendor"] or "-", alive_s, open_s)
         console.print(t)
         risky_hosts = portscan.risky_findings(r)
         if risky_hosts:
