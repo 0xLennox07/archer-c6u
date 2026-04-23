@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "c6u"
+version = "0.1.0"
+description = "TP-Link Archer C6U control suite — CLI, dashboard, DNS filter, daemon, and more"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "0xLennox07"}]
+
+dependencies = [
+    "tplinkrouterc6u>=5.18.1",
+    "rich>=15.0.0",
+    "keyring>=25.0.0",
+    "plyer>=2.1.0",
+    "qrcode[pil]>=7.4.2",
+    "prometheus_client>=0.20.0",
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "jinja2>=3.1.0",
+    "pystray>=0.19.5",
+    "Pillow>=10.0.0",
+    "speedtest-cli>=2.1.3",
+    "mac-vendor-lookup>=0.1.12",
+    "zeroconf>=0.131.0",
+    "paho-mqtt>=2.0.0",
+    "requests>=2.31.0",
+    "cryptography>=42.0.0",
+    "PyYAML>=6.0",
+    "textual>=0.60.0",
+    "websockets>=12.0",
+    "dnslib>=0.9.24",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "pyinstaller>=6.0.0"]
+
+[project.scripts]
+c6u = "c6u.cli:main"
+
+[tool.setuptools]
+packages = ["c6u"]
