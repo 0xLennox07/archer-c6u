@@ -422,6 +422,10 @@ def build_parser() -> argparse.ArgumentParser:
     _add_json(qod); qod.set_defaults(func=c.cmd_qos_diagnose)
     qos = qosub.add_parser("show", help="show per-device bandwidth via the winning endpoint")
     _add_json(qos); qos.set_defaults(func=c.cmd_qos_show)
+    qod2 = qosub.add_parser("dump", help="dump the full raw response for one endpoint (for bug-hunting)")
+    qod2.add_argument("path", help="endpoint path, e.g. 'admin/traffic?form=device&operation=load'")
+    qod2.add_argument("--data", default="operation=load", help="request body (default: operation=load)")
+    qod2.set_defaults(func=c.cmd_qos_dump)
 
     # Let plugins register their own CLI commands.
     try:

@@ -1276,6 +1276,13 @@ def cmd_qos_diagnose(args) -> None:
             console.print(f"    [red]ERR[/red] {p.get('error')}")
 
 
+def cmd_qos_dump(args) -> None:
+    from . import qos
+    with router() as r:
+        result = qos.dump_endpoint(r, args.path, args.data)
+    print(_json.dumps(result, indent=2, default=str))
+
+
 def cmd_qos_show(args) -> None:
     from . import qos
     from . import aliases as aliases_mod

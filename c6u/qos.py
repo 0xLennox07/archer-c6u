@@ -74,8 +74,25 @@ def _has_bandwidth_fields(item) -> bool:
     return any(k in item for k in BANDWIDTH_KEYS)
 
 
+def _deep_has_bandwidth(obj, depth: int = 0) -> bool:
+    """Walk nested dicts/lists up to 4 levels looking for bandwidth-like keys."""
+    if depth > 4:
+        return False
+    if isinstance(obj, dict):
+        if _has_bandwidth_fields(obj):
+            return True
+        return any(_deep_has_bandwidth(v, depth + 1) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_deep_has_bandwidth(x, depth + 1) for x in obj)
+    return False
+
+
 def _summarize(resp) -> dict:
-    """Distill a response into something printable + machine-testable."""
+    """Distill a response into something printable + machine-testable.
+
+    Handles nested envelopes like `{data: [...]}` or `{data: {host: [...]}}`
+    by drilling in one more level when the top-level has a single `data` key.
+    """
     if resp is None:
         return {"shape": "None", "has_bandwidth": False}
     if isinstance(resp, list):
@@ -83,17 +100,54 @@ def _summarize(resp) -> dict:
         return {
             "shape": f"list[{len(resp)}]",
             "keys": sorted(list(sample.keys())) if isinstance(sample, dict) else None,
-            "has_bandwidth": any(_has_bandwidth_fields(i) for i in resp),
+            "has_bandwidth": _deep_has_bandwidth(resp),
             "sample": sample if isinstance(sample, dict) else resp[:3],
         }
     if isinstance(resp, dict):
+        # If the envelope is `{data: ...}`, describe the inner payload instead.
+        if set(resp.keys()) == {"data"}:
+            inner = resp["data"]
+            inner_summary = _summarize(inner)
+            inner_summary["outer_shape"] = "dict{data: ...}"
+            return inner_summary
+        if set(resp.keys()) <= {"data", "errorcode", "success"} and "data" in resp:
+            inner_summary = _summarize(resp["data"])
+            inner_summary["outer_shape"] = f"dict{sorted(resp.keys())}"
+            inner_summary["errorcode"] = resp.get("errorcode")
+            inner_summary["success"] = resp.get("success")
+            return inner_summary
         return {
             "shape": "dict",
             "keys": sorted(list(resp.keys())),
-            "has_bandwidth": _has_bandwidth_fields(resp),
+            "has_bandwidth": _deep_has_bandwidth(resp),
+            "errorcode": resp.get("errorcode"),
+            "success": resp.get("success"),
             "sample": {k: resp[k] for k in list(resp.keys())[:8]},
         }
     return {"shape": type(resp).__name__, "has_bandwidth": False, "sample": str(resp)[:200]}
+
+
+def dump_endpoint(r, path: str, data: str = "operation=load") -> dict:
+    """Return the full raw response for a single endpoint (for bug-hunting)."""
+    try:
+        r._smart_network = True
+    except Exception:
+        pass
+    try:
+        resp = r.request(path, data, ignore_errors=True)
+        return {"ok": True, "via": "request", "response": resp}
+    except Exception as e:
+        # Try the fallbacks.
+        try:
+            resp = r.request(path, data, ignore_errors=True, ignore_response=True)
+            if resp is not None:
+                return {"ok": True, "via": "ignore_response", "response": resp}
+        except Exception:
+            pass
+        raw = _raw_request(r, path, data)
+        if raw is not None:
+            return {"ok": True, "via": "raw", "response": raw}
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
 def probe(r) -> list[dict]:
