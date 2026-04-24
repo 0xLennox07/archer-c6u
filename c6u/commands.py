@@ -1215,3 +1215,89 @@ def cmd_plugins_list(_args) -> None:
     for p in info:
         t.add_row(p["file"], p["doc"] or "-", ", ".join(p["hooks"]) or "-")
     console.print(t)
+
+
+# ===== QoS / per-device bandwidth =====
+
+def cmd_qos_probe(args) -> None:
+    from . import qos
+    with router() as r:
+        results = qos.probe(r)
+        win = qos.winning_endpoint(results)
+    if getattr(args, "json", False):
+        print(_json.dumps({"winning": win and win["path"], "probes": results}, indent=2, default=str))
+        return
+    from rich.table import Table
+    t = Table(title=f"QoS endpoint probe ({len(results)} tried)")
+    for col in ("Endpoint", "OK", "Shape", "Has bandwidth?", "Error"):
+        t.add_column(col)
+    for row in results:
+        summary = row.get("summary") or {}
+        has_bw = summary.get("has_bandwidth")
+        ok_s = "[green]yes[/green]" if row["ok"] else "[red]no[/red]"
+        bw_s = "[bold green]YES[/bold green]" if has_bw else ("[dim]no[/dim]" if row["ok"] else "-")
+        t.add_row(row["path"], ok_s, summary.get("shape") or "-",
+                  bw_s, (row.get("error") or "-")[:60])
+    console.print(t)
+    if win:
+        console.print(f"\n[bold green]Winning endpoint:[/bold green] {win['path']}")
+        console.print(f"Sample keys: {(win.get('summary') or {}).get('keys')}")
+    else:
+        console.print("\n[bold yellow]No endpoint returned per-device bandwidth data.[/bold yellow]")
+        console.print("Likely causes:")
+        console.print("  1. [bold]Game Accelerator is disabled[/bold] in the router admin UI")
+        console.print("     -> turn ON: Advanced → Game Center → Game Accelerator")
+        console.print("     -> or: Advanced → QoS (depends on firmware revision)")
+        console.print("  2. Your firmware uses a different endpoint path than any we know about")
+        console.print("     -> run `c6u qos diagnose` to dump raw responses for bug-hunting")
+
+
+def cmd_qos_diagnose(args) -> None:
+    from . import qos
+    with router() as r:
+        report = qos.diagnosis(r)
+    if getattr(args, "json", False):
+        print(_json.dumps(report, indent=2, default=str)); return
+    console.print(f"[bold]winning endpoint:[/bold] {report['winning_endpoint'] or '[red]none[/red]'}")
+    console.print(f"[bold]game accelerator enabled?[/bold] {report['game_accelerator_config']}")
+    console.print(f"[bold]devices with bandwidth data:[/bold] {report['devices_with_bandwidth']}")
+    if report["sample_bandwidth"]:
+        console.print("\n[bold]sample:[/bold]")
+        console.print(_json.dumps(report["sample_bandwidth"], indent=2, default=str))
+    console.print("\n[mute]Full probe detail:[/mute]")
+    for p in report["probes"]:
+        console.print(f"  {p['path']}")
+        summary = p.get("summary") or {}
+        if p["ok"]:
+            console.print(f"    shape={summary.get('shape')}  has_bw={summary.get('has_bandwidth')}  keys={summary.get('keys')}")
+            if summary.get("has_bandwidth") or summary.get("shape","").startswith("list"):
+                console.print(f"    sample={_json.dumps(summary.get('sample'), default=str)[:200]}")
+        else:
+            console.print(f"    [red]ERR[/red] {p.get('error')}")
+
+
+def cmd_qos_show(args) -> None:
+    from . import qos
+    from . import aliases as aliases_mod
+    from . import vendor as vendor_mod
+    with router() as r:
+        bw = qos.fetch_per_device_bandwidth(r)
+    if not bw:
+        console.print("[yellow]No QoS data returned. Run `c6u qos probe` to diagnose.[/yellow]")
+        console.print("[mute]Most common cause: Game Accelerator isn't enabled on the router.[/mute]")
+        return
+    if getattr(args, "json", False):
+        print(_json.dumps(bw, indent=2, default=str)); return
+    from rich.table import Table
+    aliases = aliases_mod.load()
+    t = Table(title=f"Per-device bandwidth ({len(bw)} devices)")
+    for col in ("Name", "MAC", "Vendor", "Down", "Up", "Usage", "Online"):
+        t.add_column(col)
+    from .render import fmt_bps, fmt_bytes, fmt_uptime
+    for mac, d in sorted(bw.items(), key=lambda x: -(x[1].get("down_speed") or 0)):
+        t.add_row(aliases.get(mac, "-"), mac,
+                  vendor_mod.vendor(mac) or "-",
+                  fmt_bps(d.get("down_speed")), fmt_bps(d.get("up_speed")),
+                  fmt_bytes(d.get("traffic_usage")),
+                  fmt_uptime(d.get("online_time")))
+    console.print(t)

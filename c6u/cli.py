@@ -413,6 +413,16 @@ def build_parser() -> argparse.ArgumentParser:
     pl = sub.add_parser("plugins", help="list loaded plugins")
     pl.set_defaults(func=c.cmd_plugins_list)
 
+    # QoS probe — find per-device bandwidth endpoint on this firmware
+    qo = sub.add_parser("qos", help="probe the router for per-device bandwidth endpoint (diagnoses why down/up speed is null)")
+    qosub = qo.add_subparsers(dest="qos_cmd", required=True)
+    qop = qosub.add_parser("probe", help="try every known QoS endpoint and report which returned bandwidth")
+    _add_json(qop); qop.set_defaults(func=c.cmd_qos_probe)
+    qod = qosub.add_parser("diagnose", help="full report including Game Accelerator enable check")
+    _add_json(qod); qod.set_defaults(func=c.cmd_qos_diagnose)
+    qos = qosub.add_parser("show", help="show per-device bandwidth via the winning endpoint")
+    _add_json(qos); qos.set_defaults(func=c.cmd_qos_show)
+
     # Let plugins register their own CLI commands.
     try:
         from . import plugins as _plug
