@@ -65,8 +65,10 @@ def cmd_status(args) -> None:
 
 
 def cmd_clients(args) -> None:
+    from . import qos as _qos
     with router() as r:
         s = r.get_status()
+        _qos.enrich_status(r, s)
     if getattr(args, "json", False):
         print(_json.dumps([to_json(d) for d in s.devices], indent=2))
     else:
@@ -113,9 +115,11 @@ def cmd_reboot(args) -> None:
 
 
 def cmd_all(args) -> None:
+    from . import qos as _qos
     with router() as r:
         fw = r.get_firmware()
         s = r.get_status()
+        _qos.enrich_status(r, s)
         ipv4 = r.get_ipv4_status()
     if getattr(args, "json", False):
         print(_json.dumps({
@@ -190,8 +194,10 @@ def cmd_qr(args) -> None:
 
 
 def cmd_log(_args) -> None:
+    from . import qos as _qos
     with router() as r:
         s = r.get_status()
+        _qos.enrich_status(r, s)
     ts = db_mod.record_snapshot(s)
     console.print(f"[green]Snapshot recorded @ {ts}[/green] (clients={s.clients_total})")
 

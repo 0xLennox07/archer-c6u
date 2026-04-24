@@ -71,8 +71,10 @@ def run(snap_every: int = 60, latency_every: int = 120,
 
     def snap_tick():
         nonlocal last_macs
+        from . import qos as _qos
         with router() as r:
             s = r.get_status()
+            _qos.enrich_status(r, s)
         db_mod.record_snapshot(s)
         seen = {(str(d.macaddress) or "").upper() for d in s.devices if d.macaddress}
         for mac in seen - last_macs:

@@ -290,8 +290,10 @@ def device_page(mac: str): return HTMLResponse(DEVICE_HTML)
 @app.get("/api/all")
 def api_all():
     try:
+        from . import qos as _qos
         with router() as r:
             s = r.get_status()
+            _qos.enrich_status(r, s)
             ipv4 = r.get_ipv4_status()
             fw = r.get_firmware()
         public_ip = None

@@ -25,8 +25,10 @@ c_scrape_errors = Counter("c6u_scrape_errors_total", "Scrape errors")
 
 
 def _scrape() -> None:
+    from . import qos as _qos
     with router() as r:
         s = r.get_status()
+        _qos.enrich_status(r, s)
         if s.cpu_usage is not None:
             g_cpu.set(s.cpu_usage)
         if s.mem_usage is not None:

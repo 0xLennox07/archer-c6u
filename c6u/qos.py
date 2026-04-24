@@ -248,21 +248,26 @@ def winning_endpoint(probe_results: list[dict]) -> dict | None:
     return None
 
 
-def fetch_per_device_bandwidth(r) -> dict[str, dict]:
-    """Run the probe once; use the winning endpoint to return {mac: {down, up, usage}}."""
-    probes = probe(r)
-    win = winning_endpoint(probes)
-    if not win:
-        return {}
-    resp = r.request(win["path"], win["data"], ignore_errors=True)
-    if not isinstance(resp, list):
-        return {}
+# C6U firmware 1.4.0 confirmed endpoint. Used as the fast path; if it fails
+# we fall back to the full probe.
+KNOWN_GOOD_ENDPOINT = ("admin/smart_network?form=device_priority", "operation=load")
+
+
+def _normalize_mac(mac: str) -> str:
+    return (mac or "").upper().replace("-", ":")
+
+
+def _extract_bandwidth(resp) -> dict[str, dict]:
+    """Flatten a response into {MAC (AA:BB:...): {down_speed, up_speed, traffic_usage, ...}}."""
     out: dict[str, dict] = {}
-    for item in resp:
+    items = resp if isinstance(resp, list) else (resp.get("data") if isinstance(resp, dict) else None)
+    if not isinstance(items, list):
+        return out
+    for item in items:
         if not isinstance(item, dict):
             continue
-        mac = (item.get("mac") or item.get("macaddr") or "").upper()
-        if not mac:
+        mac = _normalize_mac(item.get("mac") or item.get("macaddr") or item.get("key") or "")
+        if not mac or mac == "00:00:00:00:00:00":
             continue
         out[mac] = {
             "down_speed": item.get("downloadSpeed") or item.get("downSpeed") or item.get("down_speed"),
@@ -270,8 +275,68 @@ def fetch_per_device_bandwidth(r) -> dict[str, dict]:
             "traffic_usage": item.get("trafficUsage") or item.get("trafficUsed") or item.get("traffic_usage"),
             "online_time":   item.get("onlineTime")   or item.get("online_time"),
             "signal":        item.get("signal"),
+            "device_name":   item.get("deviceName"),
         }
     return out
+
+
+def fetch_per_device_bandwidth(r) -> dict[str, dict]:
+    """Return {MAC: {down_speed, up_speed, traffic_usage, ...}}.
+
+    Tries the known-good C6U endpoint first. If that fails or is empty,
+    falls back to probing every known endpoint.
+    """
+    # Fast path: known endpoint.
+    try:
+        try:
+            r._smart_network = True
+        except Exception:
+            pass
+        resp = r.request(KNOWN_GOOD_ENDPOINT[0], KNOWN_GOOD_ENDPOINT[1], ignore_errors=True)
+        data = _extract_bandwidth(resp)
+        if data:
+            return data
+    except Exception:
+        pass
+    # Slow path: full probe.
+    probes = probe(r)
+    win = winning_endpoint(probes)
+    if not win:
+        return {}
+    resp = r.request(win["path"], win["data"], ignore_errors=True)
+    return _extract_bandwidth(resp)
+
+
+def enrich_status(r, status) -> int:
+    """Merge per-device bandwidth into `status.devices` in-place.
+
+    Returns the number of devices that got real (non-None) numbers written.
+    Safe to call even when the router/endpoint don't return anything — the
+    status object is left untouched in that case.
+    """
+    try:
+        bw = fetch_per_device_bandwidth(r)
+    except Exception:
+        return 0
+    if not bw:
+        return 0
+    merged = 0
+    for d in getattr(status, "devices", []) or []:
+        mac = _normalize_mac(str(d.macaddress) if d.macaddress else "")
+        if not mac or mac not in bw:
+            continue
+        row = bw[mac]
+        if row.get("down_speed") is not None:
+            d.down_speed = row["down_speed"]
+        if row.get("up_speed") is not None:
+            d.up_speed = row["up_speed"]
+        if row.get("traffic_usage") is not None:
+            d.traffic_usage = row["traffic_usage"]
+        if row.get("online_time") is not None and not getattr(d, "online_time", None):
+            d.online_time = row["online_time"]
+        if row.get("down_speed") is not None or row.get("up_speed") is not None:
+            merged += 1
+    return merged
 
 
 def diagnosis(r) -> dict:
