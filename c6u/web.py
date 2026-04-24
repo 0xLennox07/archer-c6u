@@ -293,7 +293,7 @@ def api_all():
         from . import qos as _qos
         with router() as r:
             s = r.get_status()
-            _qos.enrich_status(r, s)
+            merged = _qos.enrich_status(r, s)
             ipv4 = r.get_ipv4_status()
             fw = r.get_firmware()
         public_ip = None
@@ -309,6 +309,7 @@ def api_all():
             "firmware": to_json(fw),
             "devices": enrich_devices_json(s.devices),
             "public_ip": public_ip,
+            "bandwidth_merged": merged,   # diagnostic: how many devices got live speed from QoS
             "ts": int(time.time()),
         })
     except Exception as e:

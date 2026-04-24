@@ -56,12 +56,20 @@ def _scrape() -> None:
 
 
 def serve(port: int = 9100, interval: int = 30) -> None:
+    from rich.console import Console
+    console = Console()
     start_http_server(port)
-    log.info("Prometheus metrics on :%d", port)
+    console.print(f"[bold green]Prometheus metrics server listening on :[/bold green][bold]{port}[/bold]")
+    console.print(f"[mute]scrape:[/mute] http://127.0.0.1:{port}/metrics   [mute](scraping every {interval}s)[/mute]")
+    console.print("[mute]Ctrl-C to stop.[/mute]")
+    scrape_count = 0
     while True:
         try:
             _scrape()
+            scrape_count += 1
+            if scrape_count % 10 == 1:  # tick every 10 scrapes so user knows it's alive
+                console.print(f"[mute]scrape #{scrape_count} ok[/mute]")
         except Exception as e:
-            log.warning("scrape error: %s", e)
+            console.print(f"[yellow]scrape error:[/yellow] {e}")
             c_scrape_errors.inc()
         time.sleep(interval)

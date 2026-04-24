@@ -113,7 +113,10 @@ def run(snap_every: int = 60, latency_every: int = 120,
         from . import anomaly as anomaly_mod
         hits = anomaly_mod.scan()
         for h in hits:
-            _fire_event(f"anomaly_{h['kind']}", **h)
+            # Strip `kind` from the payload so it doesn't collide with the
+            # positional arg to _fire_event.
+            fields = {k: v for k, v in h.items() if k != "kind"}
+            _fire_event(f"anomaly_{h['kind']}", **fields)
 
     stop = threading.Event()
     threads = [
