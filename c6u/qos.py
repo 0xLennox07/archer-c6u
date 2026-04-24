@@ -24,19 +24,39 @@ log = logging.getLogger(__name__)
 # TP-Link firmware. Ordered from most-likely-on-C6U to least. If you find a
 # new endpoint that works, add it here.
 QOS_PROBE_ENDPOINTS = [
+    # ----- Game Accelerator / Smart Network -----
     ("admin/smart_network?form=game_accelerator&operation=loadDevice", "operation=loadDevice"),
     ("admin/smart_network?form=game_accelerator",                      "operation=loadDevice"),
     ("admin/smart_network?form=application&operation=loadDevice",      "operation=loadDevice"),
     ("admin/smart_network?form=game_accelerator&operation=read",       "operation=read"),
+    # ----- QoS -----
     ("admin/qos?form=device&operation=load",                           "operation=load"),
     ("admin/qos?form=host&operation=load",                             "operation=load"),
     ("admin/qos?form=bandwidth&operation=load",                        "operation=load"),
     ("admin/qos?form=global&operation=load",                           "operation=load"),
     ("admin/network?form=qos&operation=load",                          "operation=load"),
+    # ----- Network monitors -----
     ("admin/network?form=monitor_lan&operation=load",                  "operation=load"),
     ("admin/network?form=monitor_wan&operation=load",                  "operation=load"),
     ("admin/traffic?form=statistics&operation=load",                   "operation=load"),
     ("admin/traffic?form=monitor&operation=load",                      "operation=load"),
+    # ----- System Tools → Traffic Monitor (the hint from user) -----
+    ("admin/traffic?form=ip_stat&operation=load",                      "operation=load"),
+    ("admin/traffic?form=ip_stats&operation=load",                     "operation=load"),
+    ("admin/traffic?form=device&operation=load",                       "operation=load"),
+    ("admin/traffic?form=host&operation=load",                         "operation=load"),
+    ("admin/traffic?form=list&operation=load",                         "operation=load"),
+    ("admin/traffic?form=enable&operation=load",                       "operation=load"),
+    ("admin/system_tools?form=traffic_monitor&operation=load",         "operation=load"),
+    ("admin/system?form=traffic_monitor&operation=load",               "operation=load"),
+    ("admin/systemtools?form=traffic&operation=load",                  "operation=load"),
+    ("admin/statistics?form=device&operation=load",                    "operation=load"),
+    ("admin/statistics?form=host&operation=load",                      "operation=load"),
+    ("admin/monitor?form=traffic&operation=load",                      "operation=load"),
+    ("admin/monitor?form=device&operation=load",                       "operation=load"),
+    # ----- Bandwidth Control (legacy) -----
+    ("admin/bandwidth?form=rule&operation=load",                       "operation=load"),
+    ("admin/bandwidth?form=enable&operation=load",                     "operation=load"),
 ]
 
 # Keys we expect to see in a QoS response item that indicate bandwidth.
@@ -81,6 +101,11 @@ def probe(r) -> list[dict]:
 
     `r` must be an authorized tplinkrouterc6u client (we call r.request()).
     Returns a list of {endpoint, path, data, ok, error, summary} rows.
+
+    If r.request() raises a 'ClientError: An unknown response' — common when
+    the response shape differs from what the library's high-level parser
+    expects — we fall back to _raw_request() to capture the decrypted payload
+    directly, which is what we actually care about.
     """
     # Re-enable the smart-network path even if the library turned it off earlier.
     try:
@@ -90,15 +115,67 @@ def probe(r) -> list[dict]:
 
     results: list[dict] = []
     for path, data in QOS_PROBE_ENDPOINTS:
-        row: dict = {"path": path, "data": data, "ok": False, "error": None, "summary": None}
+        row: dict = {"path": path, "data": data, "ok": False, "error": None,
+                     "summary": None, "via": "request"}
         try:
             resp = r.request(path, data, ignore_errors=True)
             row["ok"] = True
             row["summary"] = _summarize(resp)
         except Exception as e:
             row["error"] = f"{type(e).__name__}: {e}"
+            # The library throws "unknown response" when the response envelope
+            # doesn't match what it expects. Try again with ignore_response,
+            # then fall back to a raw HTTP call that bypasses parsing.
+            recovered = False
+            try:
+                resp = r.request(path, data, ignore_errors=True, ignore_response=True)
+                if resp is not None:
+                    row["ok"] = True
+                    row["via"] = "ignore_response"
+                    row["summary"] = _summarize(resp)
+                    recovered = True
+            except Exception:
+                pass
+            if not recovered:
+                raw = _raw_request(r, path, data)
+                if raw is not None:
+                    row["ok"] = True
+                    row["via"] = "raw"
+                    row["summary"] = _summarize(raw)
         results.append(row)
     return results
+
+
+def _raw_request(r, path: str, data: str):
+    """Call the same HTTP endpoint r.request() would, but return the decrypted
+    response dict as-is (no envelope validation, no `data` key unwrap). This
+    lets us see what the endpoint actually sends back when the library's
+    high-level parser rejects it as 'unknown response'.
+    """
+    try:
+        import requests as _rq
+        from json import loads
+        # Build URL the same way the library does.
+        url = f"{r.host}/cgi-bin/luci/;stok={getattr(r, '_stok', '')}/{path}"
+        # Encrypt the payload with the library's helper.
+        encrypted = r._prepare_data(data)
+        headers = getattr(r, "_headers_request", {})
+        resp = _rq.post(url, data=encrypted, headers=headers,
+                         timeout=getattr(r, "timeout", 10),
+                         verify=getattr(r, "verify_ssl", False))
+        if not resp.ok:
+            return None
+        j = resp.json()
+        # Decrypt if encrypted response envelope; otherwise return as-is.
+        if isinstance(j, dict) and "data" in j and isinstance(j["data"], str):
+            try:
+                j = loads(r._encryption.aes_decrypt(j["data"]))
+            except Exception:
+                return j  # keep raw if decrypt fails
+        return j
+    except Exception as e:
+        log.debug("raw request %s failed: %s", path, e)
+        return None
 
 
 def winning_endpoint(probe_results: list[dict]) -> dict | None:
