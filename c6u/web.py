@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import threading
 import time
+import traceback
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+
+_log = logging.getLogger("c6u.web")
 
 from . import aliases as aliases_mod
 from . import db as db_mod
@@ -287,31 +292,65 @@ def discover_page(): return HTMLResponse(DISCOVER_HTML)
 def device_page(mac: str): return HTMLResponse(DEVICE_HTML)
 
 
+# Shared router-session cache + lock so concurrent consumers (WS ticker,
+# browser polling, multiple tabs) don't open parallel admin sessions to
+# the router (TP-Link firmware allows only one admin session at a time).
+_STATE_LOCK = threading.Lock()
+_STATE_CACHE: dict | None = None
+_STATE_CACHE_AT: float = 0.0
+_STATE_CACHE_TTL = 3.0  # seconds
+
+
+def _collect_state() -> dict:
+    """One authenticated router round-trip producing the /api/all payload."""
+    from . import qos as _qos
+    with router() as r:
+        s = r.get_status()
+        merged = _qos.enrich_status(r, s)
+        ipv4 = r.get_ipv4_status()
+        fw = r.get_firmware()
+    public_ip = None
+    try:
+        with db_mod.connect() as conn:
+            row = conn.execute("SELECT ip FROM public_ip ORDER BY ts DESC LIMIT 1").fetchone()
+            public_ip = row["ip"] if row else None
+    except Exception:
+        pass
+    return {
+        "status": to_json(s),
+        "wan": to_json(ipv4),
+        "firmware": to_json(fw),
+        "devices": enrich_devices_json(s.devices),
+        "public_ip": public_ip,
+        "bandwidth_merged": merged,
+        "ts": int(time.time()),
+    }
+
+
+def _cached_state() -> dict:
+    """Return a fresh state payload, using a short-lived cache to avoid
+    overlapping router sessions when multiple consumers ask at once."""
+    global _STATE_CACHE, _STATE_CACHE_AT
+    now = time.monotonic()
+    with _STATE_LOCK:
+        if _STATE_CACHE is not None and now - _STATE_CACHE_AT < _STATE_CACHE_TTL:
+            return _STATE_CACHE
+        try:
+            payload = _collect_state()
+            _STATE_CACHE = payload
+            _STATE_CACHE_AT = now
+            return payload
+        except Exception as e:
+            # Print full traceback so we can see what's failing instead of
+            # hiding it behind a 502 in the ASGI response.
+            _log.error("state fetch failed: %s\n%s", e, traceback.format_exc())
+            raise
+
+
 @app.get("/api/all")
 def api_all():
     try:
-        from . import qos as _qos
-        with router() as r:
-            s = r.get_status()
-            merged = _qos.enrich_status(r, s)
-            ipv4 = r.get_ipv4_status()
-            fw = r.get_firmware()
-        public_ip = None
-        try:
-            with db_mod.connect() as conn:
-                row = conn.execute("SELECT ip FROM public_ip ORDER BY ts DESC LIMIT 1").fetchone()
-                public_ip = row["ip"] if row else None
-        except Exception:
-            pass
-        return JSONResponse({
-            "status": to_json(s),
-            "wan": to_json(ipv4),
-            "firmware": to_json(fw),
-            "devices": enrich_devices_json(s.devices),
-            "public_ip": public_ip,
-            "bandwidth_merged": merged,   # diagnostic: how many devices got live speed from QoS
-            "ts": int(time.time()),
-        })
+        return JSONResponse(_cached_state())
     except Exception as e:
         raise HTTPException(502, str(e))
 
@@ -642,35 +681,23 @@ def icon_512():
 
 @app.websocket("/ws")
 async def ws(socket: WebSocket):
+    """Stream a status frame every 5 seconds. Shares _cached_state() with the
+    REST endpoint, so multiple tabs / the REST poller don't trigger parallel
+    router sessions."""
     await socket.accept()
     try:
         while True:
             try:
-                def fetch():
-                    with router() as r:
-                        s = r.get_status()
-                        ipv4 = r.get_ipv4_status()
-                        fw = r.get_firmware()
-                    public_ip = None
-                    try:
-                        with db_mod.connect() as conn:
-                            row = conn.execute(
-                                "SELECT ip FROM public_ip ORDER BY ts DESC LIMIT 1"
-                            ).fetchone()
-                            public_ip = row["ip"] if row else None
-                    except Exception:
-                        pass
-                    return {
-                        "status": to_json(s), "wan": to_json(ipv4),
-                        "firmware": to_json(fw),
-                        "devices": enrich_devices_json(s.devices),
-                        "public_ip": public_ip,
-                        "ts": int(time.time()),
-                    }
-                payload = await asyncio.get_event_loop().run_in_executor(None, fetch)
+                payload = await asyncio.get_event_loop().run_in_executor(None, _cached_state)
                 await socket.send_json(payload)
+            except (WebSocketDisconnect, RuntimeError):
+                # Client went away; stop cleanly without trying to send an error.
+                return
             except Exception as e:
-                await socket.send_json({"error": str(e), "ts": int(time.time())})
+                try:
+                    await socket.send_json({"error": str(e), "ts": int(time.time())})
+                except Exception:
+                    return
             await asyncio.sleep(5)
     except WebSocketDisconnect:
         return
