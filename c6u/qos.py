@@ -24,11 +24,18 @@ log = logging.getLogger(__name__)
 # TP-Link firmware. Ordered from most-likely-on-C6U to least. If you find a
 # new endpoint that works, add it here.
 QOS_PROBE_ENDPOINTS = [
-    # ----- Game Accelerator / Smart Network -----
+    # ----- Game Accelerator / Smart Network / QoS -----
+    ("admin/smart_network?form=device_priority",                       "operation=load"),
+    ("admin/smart_network?form=device_priority",                       "operation=read"),
+    ("admin/smart_network?form=device_priority",                       "operation=list"),
     ("admin/smart_network?form=game_accelerator&operation=loadDevice", "operation=loadDevice"),
     ("admin/smart_network?form=game_accelerator",                      "operation=loadDevice"),
     ("admin/smart_network?form=application&operation=loadDevice",      "operation=loadDevice"),
     ("admin/smart_network?form=game_accelerator&operation=read",       "operation=read"),
+    # ----- Traffic Monitor (captured from web UI DevTools) -----
+    ("admin/traffic?form=data",                                        "operation=load"),
+    ("admin/traffic?form=data",                                        "operation=read"),
+    ("admin/traffic?form=data",                                        "operation=list"),
     # ----- QoS -----
     ("admin/qos?form=device&operation=load",                           "operation=load"),
     ("admin/qos?form=host&operation=load",                             "operation=load"),
